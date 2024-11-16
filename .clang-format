@@ -1,0 +1,14 @@
+---
+Language:        Cpp
+IndentWidth:     4
+TabWidth:        4
+UseTab:          Never
+BreakBeforeBraces: Attach
+ColumnLimit:     80
+AllowShortIfStatementsOnASingleLine: true
+AllowShortLoopsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Inline
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: false
+NamespaceIndentation: Inner
+AccessModifierOffset: -4
