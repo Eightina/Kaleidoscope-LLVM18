@@ -14,80 +14,71 @@
    /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/
  */
 
+#include "lexer.h"
 #include <cctype>
 #include <cstdio>
 #include <iostream>
 #include <string>
 
-enum Token {
-    tok_eof = -1,
-    tok_def = -2,
-    tok_extern = -3,
-    tok_identifier = -4,
-    tok_number = -5,
-};
-
-static std::string identifierStr;
-static double numVal;
-
 // gettok: returns the token from string input
-static int gettok() {
-    static int lastChar = ' ';
+int Lexer::gettok() {
 
-    while (std::isspace(lastChar)) {
-        lastChar = getchar();
+    while (std::isspace(_lastChar)) {
+        _lastChar = getchar();
     }
 
     // identifier: [a-zA-Z][a-zA-Z0-9]*
-    if (std::isalpha(lastChar)) {
-        identifierStr = lastChar;
-        while (std::isalnum(lastChar = getchar())) {
-            identifierStr.push_back(lastChar);
+    if (std::isalpha(_lastChar)) {
+        _identifierStr = _lastChar;
+        while (std::isalnum(_lastChar = getchar())) {
+            _identifierStr.push_back(_lastChar);
         }
 
-        if (identifierStr == "def") {
+        if (_identifierStr == "def") {
             return tok_def;
-        } else if (identifierStr == "extern") {
+        } else if (_identifierStr == "extern") {
             return tok_extern;
         }
         return tok_identifier;
     }
 
     // number: [0-9.]*
-    if (std::isdigit(lastChar) || lastChar == '.') {
+    if (std::isdigit(_lastChar) || _lastChar == '.') {
         std::string tempNumStr;
         do {
-            tempNumStr += lastChar;
-            lastChar = getchar();
-        } while (isdigit(lastChar) || lastChar == '.');
+            tempNumStr += _lastChar;
+            _lastChar = getchar();
+        } while (isdigit(_lastChar) || _lastChar == '.');
 
-        numVal = strtod(tempNumStr.c_str(), 0);
+        _numVal = strtod(tempNumStr.c_str(), 0);
         return tok_number;
     }
 
-    if (lastChar == '#') {
+    // annotation
+    if (_lastChar == '#') {
         do {
-            lastChar = getchar();
-        } while (lastChar != EOF && lastChar != '\n' && lastChar != '\r');
-        if (lastChar != EOF) {
+            _lastChar = getchar();
+        } while (_lastChar != EOF && _lastChar != '\n' && _lastChar != '\r');
+        if (_lastChar != EOF) {
             // process next line
             return gettok();
         }
     }
 
-    if (lastChar == EOF) {
+    if (_lastChar == EOF) {
         return tok_eof;
     }
 
-    int thisChar = lastChar;
-    lastChar = getchar();
+    int thisChar = _lastChar;
+    _lastChar = getchar();
     return thisChar;
 }
 
 int main() {
     // testing
+    Lexer lexer;
     while (1) {
-        int res = gettok();
+        int res = lexer.gettok();
         std::cout << res << std::endl;
     }
 }
