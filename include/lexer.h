@@ -14,7 +14,7 @@
    /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/
  */
 #pragma once
-#include <string> 
+#include <string>
 
 enum Token {
     tok_eof = -1,
@@ -28,9 +28,9 @@ class Lexer {
 public:
     // gettok: returns the token from string input
     int gettok();
+    double _numVal = .0;
+    std::string _identifierStr = "";
 
 private:
-    std::string _identifierStr = "";
-    double _numVal = .0;
     int _lastChar = ' ';
 };

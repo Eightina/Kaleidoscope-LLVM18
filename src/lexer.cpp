@@ -74,11 +74,11 @@ int Lexer::gettok() {
     return thisChar;
 }
 
-int main() {
-    // testing
-    Lexer lexer;
-    while (1) {
-        int res = lexer.gettok();
-        std::cout << res << std::endl;
-    }
-}
+// int main() {
+//     // testing
+//     Lexer lexer;
+//     while (1) {
+//         int res = lexer.gettok();
+//         std::cout << res << std::endl;
+//     }
+// }

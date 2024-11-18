@@ -1,4 +1,5 @@
-add_executable(lexer_test lexer.cpp)
+# add_executable(lexer_test lexer.cpp)
+add_executable(parser_test lexer.cpp parser.cpp)
 include_directories ("${CMAKE_SOURCE_DIR}/include")
 
 # add_subdirectory(lexer)
