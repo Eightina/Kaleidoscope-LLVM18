@@ -14,7 +14,6 @@
    /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/
  */
 #include "parser.h"
-#include <memory>
 
 std::unique_ptr<ExprAST> LogErr(const char *str) {
     std::cout << stderr << "Error: " << str << std::endl;
@@ -22,6 +21,11 @@ std::unique_ptr<ExprAST> LogErr(const char *str) {
 }
 
 std::unique_ptr<PrototypeAST> LogErrP(const char *str) {
+    LogErr(str);
+    return nullptr;
+}
+
+llvm::Value *LogErrorV(const char *str) {
     LogErr(str);
     return nullptr;
 }
@@ -36,9 +40,131 @@ void Parser::test_lexer() {
     }
 }
 
+llvm::Value *NumberExprAST::codegen() {
+    return llvm::ConstantFP::get(*(owner->_theContext), llvm::APFloat(_val));
+}
+
+llvm::Value *VariableExprAST::codegen() {
+    llvm::Value *V = owner->_namedValues[_name];
+    if (!V) LogErrorV("unknown variable name");
+    return V;
+}
+
+llvm::Value *BinaryExprAST::codegen() {
+    llvm::Value *l = _lhs->codegen();
+    llvm::Value *r = _rhs->codegen();
+    if (!l || !r) return nullptr;
+
+    switch (_op) {
+    case ('+'):
+        // we give each val IR a name
+        return owner->_builder->CreateAdd(l, r, "addtmp");
+    case ('-'):
+        return owner->_builder->CreateFSub(l, r, "subtmp");
+    case ('*'):
+        return owner->_builder->CreateFMul(l, r, "multmp");
+    case ('<'):
+        l = owner->_builder->CreateFCmpULT(l, r, "cmptmp");
+        // Convert bool 0/1 to double 0.0 or 1.0
+        return owner->_builder->CreateUIToFP(
+            l, llvm::Type::getDoubleTy(*owner->_theContext), "booltmp");
+    default:
+        return LogErrorV("invalid binary op");
+    }
+}
+
+llvm::Value *CallExprAST::codegen() {
+    // find the name int the global module table
+    llvm::Function *calleeF = owner->_theModule->getFunction(_callee);
+    if (!calleeF) return LogErrorV("unknown function referenced");
+    if (calleeF->arg_size() != _args.size())
+        return LogErrorV("incorrect number of args passed");
+
+    std::vector<llvm::Value *> argsV;
+    for (unsigned i = 0, e = _args.size(); i != e; ++i) {
+        argsV.push_back(_args[i]->codegen());
+        if (!argsV.back()) return nullptr;
+    }
+
+    return owner->_builder->CreateCall(calleeF, argsV, "calltmp");
+}
+
+llvm::Function *PrototypeAST::codegen() {
+    // create the arguments list for the function prototype
+    std::vector<llvm::Type *> doubles(
+        _args.size(), llvm::Type::getDoubleTy(*owner->_theContext));
+    // make the function type: double(double, double), etc.
+    llvm::FunctionType *FT = llvm::FunctionType::get(
+        llvm::Type::getDoubleTy(*owner->_theContext), doubles, false);
+    // codegen for function prototype. “external linkage” means that the
+    //  function may be defined outside the current module and/or that it is
+    //  callable by functions outside the module. Name passed in is the name the
+    //  user specified: since "TheModule" is specified, this name is registered
+    //  in "TheModule"s symbol table.
+    llvm::Function *F = llvm::Function::Create(
+        FT, llvm::Function::ExternalLinkage, _name, owner->_theModule.get());
+    unsigned Idx = 0;
+    for (auto &arg : F->args()) {
+        arg.setName(_args[Idx++]);
+    }
+    return F;
+}
+
+llvm::Function *FunctionAST::codegen() {
+    // First, check for an existing function from a previous 'extern'
+    //  declaration.
+    llvm::Function *theFunction =
+        owner->_theModule->getFunction(_proto->getName());
+    bool nameSame = false, argsSame = false;
+    if (!theFunction) nameSame = true;
+    for (auto &arg : theFunction->args()) {
+        if (std::string(arg.getName()) != _proto->getName()) {
+            argsSame = false;
+            break;
+        }
+    }
+    if (!nameSame || !argsSame) theFunction = _proto->codegen();
+    if (!theFunction) return nullptr;
+
+    // we want to assert that the function is empty (i.e. has no body yet)
+    //  before we start
+    if (!theFunction->empty())
+        return (llvm::Function *)LogErrorV("function cannot be redefined");
+
+    // Create a new basic block to start insertion into.
+    llvm::BasicBlock *bb =
+        llvm::BasicBlock::Create(*owner->_theContext, "entry", theFunction);
+    owner->_builder->SetInsertPoint(bb);
+    // record the function arguments in the namedvalues table
+    owner->_namedValues.clear();
+    for (auto &arg : theFunction->args()) {
+        owner->_namedValues[std::string(arg.getName())] = &arg;
+    }
+
+    if (llvm::Value *retVal = _body->codegen()) {
+        owner->_builder->CreateRet(retVal);
+        llvm::verifyFunction(*theFunction);
+        return theFunction;
+    }
+
+    // deleting the function we produced. later we may redefine a function that
+    //  we incorrectly typed in before: if we didn’t delete it, it would live
+    //  in the symbol table, with a body, preventing future redefinition.
+    theFunction->eraseFromParent();
+    return nullptr;
+}
+
+Parser::Parser() {
+    initializeModule();
+}
+
+Parser::Parser(Lexer &lexer) : _lexer(std::move(lexer)) {
+    initializeModule();
+}
+
 /// numberexpr ::= number
 std::unique_ptr<ExprAST> Parser::parseNumberExpr() {
-    auto result = std::make_unique<NumberExprAST>(_lexer._numVal);
+    auto result = std::make_unique<NumberExprAST>(_lexer._numVal, this);
     getNextToken();
     return std::move(result);
 }
@@ -59,7 +185,7 @@ std::unique_ptr<ExprAST> Parser::parseParenExpr() {
 std::unique_ptr<ExprAST> Parser::parseIdentifierExpr() {
     std::string idName = _lexer._identifierStr;
     getNextToken(); // take in identifier
-    if (_curTok != '(') return std::make_unique<VariableExprAST>(idName);
+    if (_curTok != '(') return std::make_unique<VariableExprAST>(idName, this);
 
     getNextToken(); // take in '('
     std::vector<std::unique_ptr<ExprAST>> args;
@@ -80,7 +206,7 @@ std::unique_ptr<ExprAST> Parser::parseIdentifierExpr() {
     }
 
     getNextToken(); // take in ')'
-    return std::make_unique<CallExprAST>(idName, std::move(args));
+    return std::make_unique<CallExprAST>(idName, std::move(args), this);
 }
 
 /// primary
@@ -100,6 +226,9 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
     }
 }
 
+// Install standard binary operators: 1 is lowest precedence
+std::map<char, int> Parser::_binoPrecedence{
+    {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
 // In order to parse binary expression correctly:
 //  "x+y*z" -> "x+(y*z)"
 //  uses the precedence of binary operators to guide recursion
@@ -112,9 +241,6 @@ int Parser::getTokPrecedence() {
     if (tokPrec <= 0) return -1;
     return tokPrec;
 }
-// Install standard binary operators: 1 is lowest precedence
-std::map<char, int> Parser::_binoPrecedence{
-    {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
 
 //
 /// binoprhs
@@ -160,7 +286,7 @@ std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int exprPrec,
 
         // Merge LHS/RHS.
         lhs = std::make_unique<BinaryExprAST>(binOp, std::move(lhs),
-                                              std::move(rhs));
+                                              std::move(rhs), this);
         // This will turn "a+b+" into "(a+b)" and execute the next iteration of
         //  the loop, with "+" as the current token
     }
@@ -199,7 +325,7 @@ std::unique_ptr<PrototypeAST> Parser::parsePrototype() {
 
     getNextToken();
     // finish
-    return std::make_unique<PrototypeAST>(fnName, std::move(argNames));
+    return std::make_unique<PrototypeAST>(fnName, std::move(argNames), this);
     // notice:
     //  If we want to move the argNames out, we need to call std::move
     //  here. The construction func of PrototypeAST receives
@@ -225,7 +351,7 @@ std::unique_ptr<FunctionAST> Parser::parseDefinition() {
 
     auto E = parseExpression();
     if (!E) return nullptr;
-    return std::make_unique<FunctionAST>(std::move(proto), std::move(E));
+    return std::make_unique<FunctionAST>(std::move(proto), std::move(E), this);
 }
 
 /// external ::= 'extern' prototype
@@ -240,13 +366,28 @@ std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr() {
     if (!E) return nullptr;
 
     // Make an anonymous proto
-    auto proto = std::make_unique<PrototypeAST>("", std::vector<std::string>());
-    return std::make_unique<FunctionAST>(std::move(proto), std::move(E));
+    auto proto =
+        std::make_unique<PrototypeAST>("", std::vector<std::string>(), this);
+    return std::make_unique<FunctionAST>(std::move(proto), std::move(E), this);
+}
+
+void Parser::initializeModule() {
+    fprintf(stderr, "ready> ");
+    getNextToken();
+    // open a new context and module
+    _theContext = std::make_unique<llvm::LLVMContext>();
+    _theModule = std::make_unique<llvm::Module>("my cool jit", *_theContext);
+    // create a new builder for the module
+    _builder = std::make_unique<llvm::IRBuilder<>>(*_theContext);
 }
 
 void Parser::handleDefinition() {
-    if (parseDefinition()) {
-        fprintf(stderr, "Parsed a function definition.\n");
+    if (auto defAST = parseDefinition()) {
+        if (auto *defIR = defAST->codegen()) {
+            fprintf(stderr, "Parsed a function definition.\n");
+            defIR->print(llvm::errs());
+            fprintf(stderr, "\n");
+        }
     } else {
         // Skip token for error recovery.
         getNextToken();
@@ -254,8 +395,12 @@ void Parser::handleDefinition() {
 }
 
 void Parser::handleExtern() {
-    if (parseExtern()) {
-        fprintf(stderr, "Parsed an extern\n");
+    if (auto protoAST = parseExtern()) {
+        if (auto *protoIR = protoAST->codegen()) {
+            fprintf(stderr, "Read an extern: ");
+            protoIR->print(llvm::errs());
+            fprintf(stderr, "\n");
+        }
     } else {
         // Skip token for error recovery.
         getNextToken();
@@ -264,8 +409,15 @@ void Parser::handleExtern() {
 
 void Parser::handleTopLevelExpression() {
     // Evaluate a top-level expression into an anonymous function.
-    if (parseTopLevelExpr()) {
-        fprintf(stderr, "Parsed a top-level expr\n");
+    if (auto fnAST = parseTopLevelExpr()) {
+        if (auto *fnIR = fnAST->codegen()) {
+            fprintf(stderr, "Read a top-level expr: ");
+            fnIR->print(llvm::errs());
+            fprintf(stderr, "\n");
+
+            // remove the anonymous expression
+            fnIR->eraseFromParent();
+        }
     } else {
         // Skip token for error recovery.
         getNextToken();
@@ -301,16 +453,14 @@ void Parser::mainLoop() {
 //     parser.test_lexer();
 // }
 int main() {
-  // Install standard binary operators.
-  // 1 is lowest precedence.
-  Parser p;
+    // Install standard binary operators.
+    // 1 is lowest precedence.
+    Parser p;
 
-  // Prime the first token.
-  fprintf(stderr, "ready> ");
-  p.getNextToken();
+    // Prime the first token.
 
-  // Run the main "interpreter loop" now.
-  p.mainLoop();
+    // Run the main "interpreter loop" now.
+    p.mainLoop();
 
-  return 0;
+    return 0;
 }

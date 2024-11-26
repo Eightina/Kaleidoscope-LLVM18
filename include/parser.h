@@ -15,20 +15,37 @@
 #include "lexer.h"
 #include <cstdio>
 #include <iostream>
+#include <llvm-10/llvm/IR/BasicBlock.h>
+#include <llvm-10/llvm/IR/Constants.h>
+#include <llvm-10/llvm/IR/DerivedTypes.h>
+#include <llvm-10/llvm/IR/Function.h>
+#include <llvm-10/llvm/IR/IRBuilder.h>
+#include <llvm-10/llvm/IR/LLVMContext.h>
+#include <llvm-10/llvm/IR/Module.h>
+#include <llvm-10/llvm/IR/Type.h>
+#include <llvm-10/llvm/IR/Value.h>
+#include <llvm-10/llvm/IR/Verifier.h>
+#include <llvm-10/llvm/Support/raw_ostream.h>
 #include <map>
 #include <memory>
 #include <vector>
 
+class Parser;
 // Base class for AST node
 class ExprAST {
 public:
+    ExprAST(const Parser *parser) : owner(parser) {}
     virtual ~ExprAST() = default;
+    virtual llvm::Value *codegen() = 0;
+    const Parser *owner;
 };
 
 // Expression class for numeric literals
 class NumberExprAST : public ExprAST {
 public:
-    NumberExprAST(double val) : _val(val) {}
+    NumberExprAST(double val, const Parser *parser)
+        : ExprAST(parser), _val(val) {}
+    llvm::Value *codegen() override;
 
 private:
     double _val;
@@ -37,7 +54,9 @@ private:
 // Expression class for variable
 class VariableExprAST : public ExprAST {
 public:
-    VariableExprAST(const std::string &name) : _name(name) {}
+    VariableExprAST(const std::string &name, const Parser *parser)
+        : ExprAST(parser), _name(name) {}
+    llvm::Value *codegen() override;
 
 private:
     std::string _name;
@@ -47,20 +66,24 @@ private:
 class BinaryExprAST : public ExprAST {
 public:
     BinaryExprAST(char op, std::unique_ptr<ExprAST> LHS,
-                  std::unique_ptr<ExprAST> RHS)
-        : _op(op), _LHS(std::move(LHS)), _RHS(std::move(RHS)) {}
+                  std::unique_ptr<ExprAST> RHS, const Parser *parser)
+        : ExprAST(parser), _op(op), _lhs(std::move(LHS)), _rhs(std::move(RHS)) {
+    }
+    llvm::Value *codegen() override;
 
 private:
     char _op;
-    std::unique_ptr<ExprAST> _LHS, _RHS;
+    std::unique_ptr<ExprAST> _lhs, _rhs;
 };
 
 // Expression class for function calls
 class CallExprAST : public ExprAST {
 public:
     CallExprAST(const std::string &callee,
-                std::vector<std::unique_ptr<ExprAST>> args)
-        : _callee(callee), _args(std::move(args)) {}
+                std::vector<std::unique_ptr<ExprAST>> args,
+                const Parser *parser)
+        : ExprAST(parser), _args(std::move(args)) {}
+    llvm::Value *codegen() override;
 
 private:
     std::string _callee;
@@ -71,10 +94,12 @@ private:
 // its name, arg names, arg number
 class PrototypeAST {
 public:
-    PrototypeAST(const std::string &name, std::vector<std::string> args)
-        : _name(name), _args(std::move(args)) {}
-
+    PrototypeAST(const std::string &name, std::vector<std::string> args,
+                 const Parser *parser)
+        : _name(name), _args(std::move(args)), owner(parser) {}
     const std::string &getName() const { return _name; }
+    llvm::Function *codegen();
+    const Parser *owner;
 
 private:
     std::string _name;
@@ -85,8 +110,10 @@ private:
 class FunctionAST {
 public:
     FunctionAST(std::unique_ptr<PrototypeAST> proto,
-                std::unique_ptr<ExprAST> body)
-        : _proto(std::move(proto)), _body(std::move(body)) {}
+                std::unique_ptr<ExprAST> body, const Parser *parser)
+        : _proto(std::move(proto)), _body(std::move(body)), owner(parser) {}
+    llvm::Function *codegen();
+    const Parser *owner;
 
 private:
     std::unique_ptr<PrototypeAST> _proto;
@@ -95,11 +122,12 @@ private:
 
 std::unique_ptr<ExprAST> LogErr(const char *str);
 std::unique_ptr<PrototypeAST> LogErrP(const char *str);
+llvm::Value *LogErrorV(const char *str);
 
 class Parser {
 public:
-    Parser() = default;
-    Parser(Lexer &lexer) : _lexer(std::move(lexer)) {}
+    Parser();
+    Parser(Lexer &lexer);
 
     void test_lexer();
 
@@ -117,20 +145,26 @@ public:
     //
 
     // handling basic expression units-----------------------------------------
+    /// numberexpr ::= number
     std::unique_ptr<ExprAST> parseNumberExpr();
+    /// parenexpr ::= '(' expression ')'
     std::unique_ptr<ExprAST> parseParenExpr();
+    /// identifierexpr ::= identifier ::= identifier '(' expression* ')'
     std::unique_ptr<ExprAST> parseIdentifierExpr();
+    /// primary ::= identifierexpr ::= numberexpr ::= parenexpr
     std::unique_ptr<ExprAST> parsePrimary();
     //-------------------------------------------------------------------------
 
     // handling binary expressions---------------------------------------------
+    /// binoprhs ::= ('+' primary)*
     std::unique_ptr<ExprAST> parseBinOpRHS(int exprPrec,
                                            std::unique_ptr<ExprAST> lhs);
+    /// expression ::= primary binoprhs
     std::unique_ptr<ExprAST> parseExpression();
     //-------------------------------------------------------------------------
 
     // handling fucntion prototypes--------------------------------------------
-    // prototype ::= id '(' id* ')'
+    /// prototype ::= id '(' id* ')'
     std::unique_ptr<PrototypeAST> parsePrototype();
     /// definition ::= 'def' prototype expression
     std::unique_ptr<FunctionAST> parseDefinition();
@@ -142,6 +176,7 @@ public:
     std::unique_ptr<FunctionAST> parseTopLevelExpr();
     //-------------------------------------------------------------------------
 
+    void initializeModule();
     // error handling-------------------------------------------------------
     void handleDefinition();
     void handleExtern();
@@ -149,9 +184,13 @@ public:
     //-------------------------------------------------------------------------
     void mainLoop();
 
-private:
+    // public:
     Lexer _lexer;
     int _curTok;
     // this holds the precedence for each binary operator that we define
     static std::map<char, int> _binoPrecedence;
+    static std::unique_ptr<llvm::LLVMContext> _theContext;
+    static std::unique_ptr<llvm::IRBuilder<>> _builder;
+    static std::unique_ptr<llvm::Module> _theModule;
+    static std::map<std::string, llvm::Value *> _namedValues;
 };

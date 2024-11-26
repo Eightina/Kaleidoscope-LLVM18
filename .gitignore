@@ -1,7 +1,10 @@
 build
 bin
 compile_commands.json
+launch.json
 .cache
+.vscode
+
 
 # Prerequisites
 *.d
