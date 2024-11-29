@@ -13,7 +13,6 @@
     _\ \/ -_) |/ / -_) _ \/ __/ / _ \/ _ `/
    /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/
  */
-#include "llvm/ADT/APFloat.h"
 #include "lexer.h"
 #include <cctype>
 #include <cstdio>

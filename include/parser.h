@@ -12,6 +12,7 @@
     _\ \/ -_) |/ / -_) _ \/ __/ / _ \/ _ `/
    /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/
  */
+#pragma once
 #include "lexer.h"
 #include <cstdio>
 #include <iostream>
@@ -82,7 +83,7 @@ public:
     CallExprAST(const std::string &callee,
                 std::vector<std::unique_ptr<ExprAST>> args,
                 const Parser *parser)
-        : ExprAST(parser), _args(std::move(args)) {}
+        : ExprAST(parser), _callee(callee), _args(std::move(args)) {}
     llvm::Value *codegen() override;
 
 private:
@@ -98,6 +99,7 @@ public:
                  const Parser *parser)
         : _name(name), _args(std::move(args)), owner(parser) {}
     const std::string &getName() const { return _name; }
+    const std::vector<std::string> &getArgs() const { return _args; }
     llvm::Function *codegen();
     const Parser *owner;
 
@@ -176,7 +178,7 @@ public:
     std::unique_ptr<FunctionAST> parseTopLevelExpr();
     //-------------------------------------------------------------------------
 
-    void initializeModule();
+    void initialize();
     // error handling-------------------------------------------------------
     void handleDefinition();
     void handleExtern();

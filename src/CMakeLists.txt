@@ -1,15 +1,23 @@
-# add_executable(lexer_test lexer.cpp)
-
-find_package(LLVM REQUIRED CONFIG)
-message("================================================")
-message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-add_definitions(${LLVM_DEFINITIONS})
-
 add_executable(parser_test lexer.cpp parser.cpp)
-include_directories ("${CMAKE_SOURCE_DIR}/include")
-include_directories(${LLVM_INCLUDE_DIRS})
-target_link_libraries(parser_test PRIVATE ${LLVM_LIBRARIES})
+target_include_directories(parser_test PRIVATE ${LLVM_INCLUDE_DIRS})
+target_link_libraries(parser_test PRIVATE 
+    LLVMCore
+    # LLVMSupport
+)
+# include_directories ("${PROJECT_SOURCE_DIR}/include")
 
+# add_executable(lexer_test lexer.cpp)
+# target_include_directories(lexer_test PRIVATE ${PROJECT_SOURCE_DIR}/include)
+# include_directories ("${PROJECT_SOURCE_DIR}/include")
+# include_directories(${LLVM_INCLUDE_DIRS})
+
+# add_executable(linking_test linking_test.cpp)
+# message("LLVM_LIBRARIES @ ${LLVM_LIBRARIES}")
+# target_link_libraries(linking_test PRIVATE 
+#     LLVMCore
+#     # LLVMSupport
+# )
+# target_include_directories(linking_test PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
 # add_subdirectory(lexer)
 # aux_source_directory (. SRC_LIST)

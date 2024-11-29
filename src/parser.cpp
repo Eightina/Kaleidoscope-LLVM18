@@ -30,15 +30,9 @@ llvm::Value *LogErrorV(const char *str) {
     return nullptr;
 }
 
-int Parser::getNextToken() {
-    return _curTok = _lexer.gettok();
-}
-
-void Parser::test_lexer() {
-    while (true) {
-        getNextToken();
-    }
-}
+// =====================================================================
+// codegen
+// =====================================================================
 
 llvm::Value *NumberExprAST::codegen() {
     return llvm::ConstantFP::get(*(owner->_theContext), llvm::APFloat(_val));
@@ -115,14 +109,26 @@ llvm::Function *FunctionAST::codegen() {
     //  declaration.
     llvm::Function *theFunction =
         owner->_theModule->getFunction(_proto->getName());
-    bool nameSame = false, argsSame = false;
-    if (!theFunction) nameSame = true;
-    for (auto &arg : theFunction->args()) {
-        if (std::string(arg.getName()) != _proto->getName()) {
+    bool nameSame = true, argsSame = true;
+    if (theFunction) {
+        const auto &fargs = theFunction->args();
+        const auto &pargs = _proto->getArgs();
+        int tempi = 0;
+        if (theFunction->arg_size() == pargs.size()) {
+            for (auto& arg : fargs) {
+                if (std::string(arg.getName()) != pargs[tempi]) {
+                    argsSame = false;
+                    break;
+                }
+                ++tempi;
+            }
+        } else {
             argsSame = false;
-            break;
         }
+    } else {
+        nameSame = false;
     }
+
     if (!nameSame || !argsSame) theFunction = _proto->codegen();
     if (!theFunction) return nullptr;
 
@@ -140,7 +146,6 @@ llvm::Function *FunctionAST::codegen() {
     for (auto &arg : theFunction->args()) {
         owner->_namedValues[std::string(arg.getName())] = &arg;
     }
-
     if (llvm::Value *retVal = _body->codegen()) {
         owner->_builder->CreateRet(retVal);
         llvm::verifyFunction(*theFunction);
@@ -154,12 +159,35 @@ llvm::Function *FunctionAST::codegen() {
     return nullptr;
 }
 
+// =====================================================================
+// Parser
+// =====================================================================
+
+// Install standard binary operators: 1 is lowest precedence
+std::map<char, int> Parser::_binoPrecedence{
+    {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
+
+std::unique_ptr<llvm::LLVMContext> Parser::_theContext = nullptr;
+std::unique_ptr<llvm::Module> Parser::_theModule = nullptr;
+std::unique_ptr<llvm::IRBuilder<>> Parser::_builder = nullptr;
+std::map<std::string, llvm::Value *> Parser::_namedValues;
+
 Parser::Parser() {
-    initializeModule();
+    initialize();
 }
 
 Parser::Parser(Lexer &lexer) : _lexer(std::move(lexer)) {
-    initializeModule();
+    initialize();
+}
+
+int Parser::getNextToken() {
+    return _curTok = _lexer.gettok();
+}
+
+void Parser::test_lexer() {
+    while (true) {
+        getNextToken();
+    }
 }
 
 /// numberexpr ::= number
@@ -226,9 +254,6 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
     }
 }
 
-// Install standard binary operators: 1 is lowest precedence
-std::map<char, int> Parser::_binoPrecedence{
-    {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
 // In order to parse binary expression correctly:
 //  "x+y*z" -> "x+(y*z)"
 //  uses the precedence of binary operators to guide recursion
@@ -367,11 +392,12 @@ std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr() {
 
     // Make an anonymous proto
     auto proto =
-        std::make_unique<PrototypeAST>("", std::vector<std::string>(), this);
+        // std::make_unique<PrototypeAST>("", std::vector<std::string>(), this);
+        std::make_unique<PrototypeAST>("__anon_expr", std::vector<std::string>(), this);
     return std::make_unique<FunctionAST>(std::move(proto), std::move(E), this);
 }
 
-void Parser::initializeModule() {
+void Parser::initialize() {
     fprintf(stderr, "ready> ");
     getNextToken();
     // open a new context and module
@@ -461,6 +487,8 @@ int main() {
 
     // Run the main "interpreter loop" now.
     p.mainLoop();
+    
+    p._theModule->print(llvm::errs(), nullptr);
 
     return 0;
 }
