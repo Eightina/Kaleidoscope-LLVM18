@@ -6,14 +6,36 @@
  * Author: orion
  * Email: orion.que@outlook.com
  * ----------------------------------------------
-    This file builds AST with recursive descent parsing
+    This file builds a REPL with AST with recursive descent parsing
     & operator-precedence parsing, and then generate code with LLVM backend.
+    
+    !!!==============!!!Warning:!!!==============!!!
+    Some of the code here tries to make functions redefineable, like the IO below.
+    We try to start new a module everytime we complete a high level handling, so that 
+    we expect the symbols can be named the same in a new module without conflicts.
+    However, duplication of symbols in separate modules is not allowed since LLVM-9. That
+    means you can not redefine function in your Kaleidoscope as its shown below.
+    Just skip this part.
+
+    The reason is that the newer OrcV2 JIT APIs are trying to stay very close to the
+    static and dynamic linker rules, including rejecting duplicate symbols.
+    Requiring symbol names to be unique allows us to support concurrent compilation
+    for symbols using the (unique) symbol names as keys for tracking.
+
+    ''' this is ilegal now
+    //ready> def foo(x) x + 1;
+    //ready> foo(2);
+    //Evaluated to 3.000000
+    //ready> def foo(x) x + 2;
+    //ready> foo(2);
+    //Evaluated to 4.000000
+    '''
  *    ____                  __  _
      / __/__ _  _____ ___  / /_(_)__  ___ _
     _\ \/ -_) |/ / -_) _ \/ __/ / _ \/ _ `/
    /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/
  */
-#include "parser.h"
+#include "parser_JIT.h"
 
 std::unique_ptr<ExprAST> LogErr(const char *str) {
     std::cout << stderr << "Error: " << str << std::endl;
@@ -69,7 +91,8 @@ llvm::Value *BinaryExprAST::codegen() {
 
 llvm::Value *CallExprAST::codegen() {
     // find the name int the global module table
-    llvm::Function *calleeF = owner->_theModule->getFunction(_callee);
+    // llvm::Function *calleeF = owner->_theModule->getFunction(_callee);
+    llvm::Function *calleeF = owner->getFunction(_callee);
     if (!calleeF) return LogErrorV("unknown function referenced");
     if (calleeF->arg_size() != _args.size())
         return LogErrorV("incorrect number of args passed");
@@ -105,42 +128,19 @@ llvm::Function *PrototypeAST::codegen() {
 }
 
 llvm::Function *FunctionAST::codegen() {
-    // First, check for an existing function from a previous 'extern'
-    //  declaration.
-    llvm::Function *theFunction =
-        owner->_theModule->getFunction(_proto->getName());
-    bool nameSame = true, argsSame = true;
-    if (theFunction) {
-        const auto &fargs = theFunction->args();
-        const auto &pargs = _proto->getArgs();
-        int tempi = 0;
-        if (theFunction->arg_size() == pargs.size()) {
-            for (auto &arg : fargs) {
-                if (std::string(arg.getName()) != pargs[tempi]) {
-                    argsSame = false;
-                    break;
-                }
-                ++tempi;
-            }
-        } else {
-            argsSame = false;
-        }
-    } else {
-        nameSame = false;
-    }
-
-    if (!nameSame || !argsSame) theFunction = _proto->codegen();
+    // In JIT, we dont mind redefinition or whatsoever.
+    // Firstly, transfer ownership of the prototype to the FunctionProtos map,
+    //  but keep a reference to it for use below.
+    auto &p = *_proto;
+    owner->_functionProtos[_proto->getName()] = std::move(_proto);
+    llvm::Function *theFunction = owner->getFunction(p.getName());
     if (!theFunction) return nullptr;
-
-    // we want to assert that the function is empty (i.e. has no body yet)
-    //  before we start
-    if (!theFunction->empty())
-        return (llvm::Function *)LogErrorV("function cannot be redefined");
 
     // Create a new basic block to start insertion into.
     llvm::BasicBlock *bb =
         llvm::BasicBlock::Create(*owner->_theContext, "entry", theFunction);
     owner->_builder->SetInsertPoint(bb);
+
     // record the function arguments in the namedvalues table
     owner->_namedValues.clear();
     for (auto &arg : theFunction->args()) {
@@ -164,6 +164,11 @@ llvm::Function *FunctionAST::codegen() {
 // =====================================================================
 // Parser
 // =====================================================================
+
+// std::unique_ptr<llvm::LLVMContext> Parser::_theContext = nullptr;
+// std::unique_ptr<llvm::Module> Parser::_theModule = nullptr;
+// std::unique_ptr<llvm::IRBuilder<>> Parser::_builder = nullptr;
+// std::map<std::string, llvm::Value *> Parser::_namedValues;
 
 Parser::Parser() {
     initialize();
@@ -394,16 +399,89 @@ std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr() {
 // =====================================================================
 // Top level modules and drivers
 // =====================================================================
+void Parser::handleDefinition() {
+    if (auto defAST = parseDefinition()) {
+        if (auto *defIR = defAST->codegen()) {
+            fprintf(stderr, "Parsed a function definition.\n");
+            defIR->print(llvm::errs());
+            fprintf(stderr, "\n");
+            // transfer the newly defined function to the JIT
+            //  and open a new module
+            auto tsm = llvm::orc::ThreadSafeModule(std::move(_theModule),
+                                                   std::move(_theContext));
+            _exitOnErr(_theJIT->addModule(std::move(tsm)));
+            initializeModuleAndPassManager();
+        }
+    } else {
+        // Skip token for error recovery.
+        getNextToken();
+    }
+}
+
+void Parser::handleExtern() {
+    if (auto protoAST = parseExtern()) {
+        if (auto *protoIR = protoAST->codegen()) {
+            fprintf(stderr, "Read an extern: ");
+            protoIR->print(llvm::errs());
+            fprintf(stderr, "\n");
+            // add the prototype to _functionProtos
+            _functionProtos[protoAST->getName()] = std::move(protoAST);
+        }
+    } else {
+        // Skip token for error recovery.
+        getNextToken();
+    }
+}
+
+void Parser::handleTopLevelExpression() {
+    // Evaluate a top-level expression into an anonymous function.
+    if (auto fnAST = parseTopLevelExpr()) {
+        if (auto *fnIR = fnAST->codegen()) {
+            // if (fnAST->codegen()) {
+            fprintf(stderr, "Read a top-level expr: ");
+            fnIR->print(llvm::errs());
+            fprintf(stderr, "\n");
+            // create a ResourceTracker to track JIT's memory allocated to
+            //  our anonymous expression, which we can free after execution
+            auto rt = _theJIT->getMainJITDylib().createResourceTracker();
+            auto tsm = llvm::orc::ThreadSafeModule(std::move(_theModule),
+                                                   std::move(_theContext));
+
+            // addModule triggers code generation for all the functions
+            //  in the module, and accepts a ResourceTracker which can be used
+            //  to remove the module from the JIT later.
+            _exitOnErr(_theJIT->addModule(std::move(tsm), rt));
+            initializeModuleAndPassManager();
+
+            // search the jit for the _anon_expr symbol
+            auto exprSymbol = _exitOnErr(_theJIT->lookup("__anon_expr"));
+            // assert(exprSymbol && "Function not found");
+
+            // Get the symbol's address and cast it to the right type (takes no
+            //  arguments, returns a double) so we can call it as a native
+            //  function.
+            double (*fp)() = exprSymbol.getAddress().toPtr<double (*)()>();
+            fprintf(stderr, "Evaluated to %f\n", fp());
+
+            // remove the anonymous expression (the whole module) from the JIT
+            _exitOnErr(rt->remove());
+        }
+    } else {
+        // Skip token for error recovery.
+        getNextToken();
+    }
+}
+
 void Parser::runOpt(llvm::Function *theFunction) {
     _theFPM->run(*theFunction, *_theFAM);
 }
 
-void Parser::initialize() {
-    fprintf(stderr, "ready> ");
-    getNextToken();
+void Parser::initializeModuleAndPassManager() {
     // open a new context and module---------------------------------------
     _theContext = std::make_unique<llvm::LLVMContext>();
-    _theModule = std::make_unique<llvm::Module>("my jit", *_theContext);
+    _theModule =
+        std::make_unique<llvm::Module>("KaleidoScopeJIT", *_theContext);
+    _theModule->setDataLayout(_theJIT->getDataLayout());
 
     // create a new builder for the module---------------------------------
     _builder = std::make_unique<llvm::IRBuilder<>>(*_theContext);
@@ -437,47 +515,28 @@ void Parser::initialize() {
     _pb.crossRegisterProxies(*_theLAM, *_theFAM, *_theCGAM, *_theMAM);
 }
 
-void Parser::handleDefinition() {
-    if (auto defAST = parseDefinition()) {
-        if (auto *defIR = defAST->codegen()) {
-            fprintf(stderr, "Parsed a function definition.\n");
-            defIR->print(llvm::errs());
-            fprintf(stderr, "\n");
-        }
-    } else {
-        // Skip token for error recovery.
-        getNextToken();
-    }
+void Parser::initialize() {
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();
+
+    // Prime the first token.
+    fprintf(stderr, "ready> ");
+    getNextToken();
+
+    _theJIT = _exitOnErr(llvm::orc::KaleidoscopeJIT::Create());
+    initializeModuleAndPassManager();
 }
 
-void Parser::handleExtern() {
-    if (auto protoAST = parseExtern()) {
-        if (auto *protoIR = protoAST->codegen()) {
-            fprintf(stderr, "Read an extern: ");
-            protoIR->print(llvm::errs());
-            fprintf(stderr, "\n");
-        }
-    } else {
-        // Skip token for error recovery.
-        getNextToken();
-    }
-}
+llvm::Function *Parser::getFunction(std::string name) {
+    // check if the function has been added to the current module
+    if (auto *f = _theModule->getFunction(name)) return f;
+    // if not, check whether we can codegenthe declaration from prototype
+    auto fi = _functionProtos.find(name);
+    if (fi != _functionProtos.end()) return fi->second->codegen();
 
-void Parser::handleTopLevelExpression() {
-    // Evaluate a top-level expression into an anonymous function.
-    if (auto fnAST = parseTopLevelExpr()) {
-        if (auto *fnIR = fnAST->codegen()) {
-            fprintf(stderr, "Read a top-level expr: ");
-            fnIR->print(llvm::errs());
-            fprintf(stderr, "\n");
-
-            // remove the anonymous expression
-            fnIR->eraseFromParent();
-        }
-    } else {
-        // Skip token for error recovery.
-        getNextToken();
-    }
+    // if no existing prototype exists, return null;
+    return nullptr;
 }
 
 /// top ::= definition | external | expression | ';'
@@ -508,9 +567,14 @@ std::map<char, int> Parser::_binoPrecedence{
     {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
 
 int main() {
-    Parser p;
+    // Install standard binary operators.
+    // 1 is lowest precedence.
+    // llvm::InitializeAllTargets();
+    // llvm::InitializeAllTargetMCs();
+    // llvm::InitializeAllAsmPrinters();
+    // llvm::InitializeAllAsmParsers();
 
-    // Prime the first token.
+    Parser p;
 
     // Run the main "interpreter loop" now.
     p.mainLoop();
