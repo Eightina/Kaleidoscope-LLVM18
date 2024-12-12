@@ -52,7 +52,7 @@ llvm::Value *BinaryExprAST::codegen() {
     switch (_op) {
     case ('+'):
         // we give each val IR a name
-        return owner->_builder->CreateAdd(l, r, "addtmp");
+        return owner->_builder->CreateFAdd(l, r, "addtmp");
     case ('-'):
         return owner->_builder->CreateFSub(l, r, "subtmp");
     case ('*'):
@@ -115,7 +115,7 @@ llvm::Function *FunctionAST::codegen() {
         const auto &pargs = _proto->getArgs();
         int tempi = 0;
         if (theFunction->arg_size() == pargs.size()) {
-            for (auto& arg : fargs) {
+            for (auto &arg : fargs) {
                 if (std::string(arg.getName()) != pargs[tempi]) {
                     argsSame = false;
                     break;
@@ -149,6 +149,8 @@ llvm::Function *FunctionAST::codegen() {
     if (llvm::Value *retVal = _body->codegen()) {
         owner->_builder->CreateRet(retVal);
         llvm::verifyFunction(*theFunction);
+        // after verifying consistency, do optimizations
+        owner->runOpt(theFunction);
         return theFunction;
     }
 
@@ -162,15 +164,6 @@ llvm::Function *FunctionAST::codegen() {
 // =====================================================================
 // Parser
 // =====================================================================
-
-// Install standard binary operators: 1 is lowest precedence
-std::map<char, int> Parser::_binoPrecedence{
-    {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
-
-std::unique_ptr<llvm::LLVMContext> Parser::_theContext = nullptr;
-std::unique_ptr<llvm::Module> Parser::_theModule = nullptr;
-std::unique_ptr<llvm::IRBuilder<>> Parser::_builder = nullptr;
-std::map<std::string, llvm::Value *> Parser::_namedValues;
 
 Parser::Parser() {
     initialize();
@@ -393,18 +386,55 @@ std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr() {
     // Make an anonymous proto
     auto proto =
         // std::make_unique<PrototypeAST>("", std::vector<std::string>(), this);
-        std::make_unique<PrototypeAST>("__anon_expr", std::vector<std::string>(), this);
+        std::make_unique<PrototypeAST>("__anon_expr",
+                                       std::vector<std::string>(), this);
     return std::make_unique<FunctionAST>(std::move(proto), std::move(E), this);
+}
+
+// =====================================================================
+// Top level modules and drivers
+// =====================================================================
+void Parser::runOpt(llvm::Function *theFunction) {
+    _theFPM->run(*theFunction, *_theFAM);
 }
 
 void Parser::initialize() {
     fprintf(stderr, "ready> ");
     getNextToken();
-    // open a new context and module
+    // open a new context and module---------------------------------------
     _theContext = std::make_unique<llvm::LLVMContext>();
-    _theModule = std::make_unique<llvm::Module>("my cool jit", *_theContext);
-    // create a new builder for the module
+    _theModule = std::make_unique<llvm::Module>("my jit", *_theContext);
+
+    // create a new builder for the module---------------------------------
     _builder = std::make_unique<llvm::IRBuilder<>>(*_theContext);
+    // create new pass and analysis managers
+    _theFPM = std::make_unique<llvm::FunctionPassManager>();
+    _theLAM = std::make_unique<llvm::LoopAnalysisManager>();
+    _theFAM = std::make_unique<llvm::FunctionAnalysisManager>();
+    _theCGAM = std::make_unique<llvm::CGSCCAnalysisManager>();
+    _theMAM = std::make_unique<llvm::ModuleAnalysisManager>();
+    _thePIC = std::make_unique<llvm::PassInstrumentationCallbacks>();
+    _theSI = std::make_unique<llvm::StandardInstrumentations>(
+        *_theContext, /*DebugLogging*/ true);
+    _theSI->registerCallbacks(*_thePIC, _theMAM.get());
+
+    // Add transform passes.-----------------------------------------------
+    // Do simple "peephole" optimizations and bit-twiddling optzns.
+    _theFPM->addPass(llvm::InstCombinePass());
+    // _theFPM->addPass(llvm::AggressiveInstCombinePass());
+    // Reassociate expressions.
+    _theFPM->addPass(llvm::ReassociatePass());
+    // Eliminate Common SubExpressions.
+    _theFPM->addPass(llvm::GVNPass());
+    // Simplify the control flow graph (deleting unreachable blocks, etc).
+    _theFPM->addPass(llvm::SimplifyCFGPass());
+    // // Run InstCombine again to catch any new opportunities.
+    // _theFPM->addPass(llvm::InstCombinePass());
+
+    // Register analysis passes used in these transform passes.------------
+    _pb.registerModuleAnalyses(*_theMAM);
+    _pb.registerFunctionAnalyses(*_theFAM);
+    _pb.crossRegisterProxies(*_theLAM, *_theFAM, *_theCGAM, *_theMAM);
 }
 
 void Parser::handleDefinition() {
@@ -473,21 +503,18 @@ void Parser::mainLoop() {
     }
 }
 
-// int main() {
-//     std::cout << "parser_test" << std::endl;
-//     Parser parser;
-//     parser.test_lexer();
-// }
+// Install standard binary operators: 1 is lowest precedence
+std::map<char, int> Parser::_binoPrecedence{
+    {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
+
 int main() {
-    // Install standard binary operators.
-    // 1 is lowest precedence.
     Parser p;
 
     // Prime the first token.
 
     // Run the main "interpreter loop" now.
     p.mainLoop();
-    
+
     p._theModule->print(llvm::errs(), nullptr);
 
     return 0;

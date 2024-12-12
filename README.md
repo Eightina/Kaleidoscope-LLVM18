@@ -1,2 +1,2 @@
 # MyKaleidoscope
-An C++ implementation of the LLVM tutorial program, Kaleidoscope
+A C++ implementation of the LLVM tutorial program, Kaleidoscope, based on LLVM 18.
