@@ -1,3 +1,4 @@
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 add_executable(aot_parser lexer.cpp parser.cpp)
 add_executable(jit_parser lexer.cpp parser_JIT.cpp)
 target_include_directories(aot_parser PRIVATE ${LLVM_INCLUDE_DIRS})
