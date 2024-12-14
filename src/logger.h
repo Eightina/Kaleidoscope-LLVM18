@@ -7,21 +7,33 @@
  * Author: orion
  * Email: orion.que@outlook.com
  * ----------------------------------------------
- *    ____                  __  _          
+ *    ____                  __  _
      / __/__ _  _____ ___  / /_(_)__  ___ _
     _\ \/ -_) |/ / -_) _ \/ __/ / _ \/ _ `/
-   /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/ 
+   /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/
  */
 #pragma once
+#include "compiler_type.h"
+#include <iostream>
 #include <llvm-18/llvm/IR/Value.h>
 #include <memory>
-#include <iostream>
 
-class ExprAST;
-class PrototypeAST;
+template <CompilerType CT> class ExprAST;
+template <CompilerType CT> class PrototypeAST;
 
-std::unique_ptr<ExprAST> LogErr(const char *str);
+template <CompilerType CT>
+std::unique_ptr<ExprAST<CT>> LogErr(const char *str) {
+    std::cout << stderr << "Error: " << str << std::endl;
+    return nullptr;
+}
 
-std::unique_ptr<PrototypeAST> LogErrP(const char *str);
+template <CompilerType CT>
+std::unique_ptr<PrototypeAST<CT>> LogErrP(const char *str) {
+    LogErr<CT>(str);
+    return nullptr;
+}
 
-llvm::Value *LogErrorV(const char *str);
+template <CompilerType CT> llvm::Value *LogErrorV(const char *str) {
+    LogErr<CT>(str);
+    return nullptr;
+}
