@@ -13,13 +13,15 @@
    /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/ 
  */
 #include "parser.h"
+#include "driver.h"
 #include "compiler_type.h"
 
 int main() {
     Parser<CompilerType::AOT> p;
+    Driver<CompilerType::AOT> driver(&p);
 
     // Run the main "interpreter loop" now.
-    p.mainLoop();
+    driver.mainLoop();
 
     p._theModule->print(llvm::errs(), nullptr);
 

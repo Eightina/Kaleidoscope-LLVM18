@@ -2,8 +2,8 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ast)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/ast)
 
-add_executable(aot_parser lexer.cpp parser.cpp main_aot.cpp)
-add_executable(jit_parser lexer.cpp parser.cpp main_jit.cpp)
+add_executable(aot_parser lexer.cpp main_aot.cpp)
+add_executable(jit_parser lexer.cpp main_jit.cpp)
 target_include_directories(aot_parser PRIVATE ${LLVM_INCLUDE_DIRS})
 target_include_directories(jit_parser PRIVATE ${LLVM_INCLUDE_DIRS})
 
