@@ -1,7 +1,7 @@
 /*
  * File: expr_ast.h
  * Path: /ast/expr_ast.h
- * Module: src
+ * Module: ast
  * Lang: C/C++
  * Created Date: Friday, December 13th 2024, 2:47:29 pm
  * Author: orion
@@ -17,46 +17,50 @@
 #include "logger.h"
 #include <llvm-18/llvm/IR/Constants.h>
 #include <llvm-18/llvm/IR/Function.h>
+#include <llvm-18/llvm/IR/IRBuilder.h>
 #include <llvm-18/llvm/IR/Value.h>
 
-template <CompilerType CT> class Parser;
+// template <CompilerType CT> class Parser;
+template <CompilerType CT> class ParserEnv;
 
 // Base class for AST node
 template <CompilerType CT> class ExprAST {
 public:
-    ExprAST(Parser<CT> *parser) : owner(parser) {}
+    ExprAST(ParserEnv<CT> *env) : env_(env) {}
     virtual ~ExprAST() = default;
     virtual llvm::Value *codegen() = 0;
-    Parser<CT> *owner;
+
+protected:
+    ParserEnv<CT> *env_;
 };
 
 // Expression class for numeric literals
 template <CompilerType CT> class NumberExprAST : public ExprAST<CT> {
 public:
-    NumberExprAST(double val, Parser<CT> *parser)
-        : ExprAST<CT>(parser), _val(val) {}
+    NumberExprAST(double val, ParserEnv<CT> *env)
+        : ExprAST<CT>(env), val_(val) {}
     llvm::Value *codegen() override {
-        return llvm::ConstantFP::get(*(this->owner->_theContext),
-                                     llvm::APFloat(this->_val));
+        return llvm::ConstantFP::get(*(this->env_->getContext()),
+                                     llvm::APFloat(this->val_));
     }
 
 private:
-    double _val;
+    double val_;
 };
 
 // Expression class for variable
 template <CompilerType CT> class VariableExprAST : public ExprAST<CT> {
 public:
-    VariableExprAST(const std::string &name, Parser<CT> *parser)
-        : ExprAST<CT>(parser), _name(name) {}
+    VariableExprAST(const std::string &name, ParserEnv<CT> *env)
+        : ExprAST<CT>(env), name_(name) {}
     llvm::Value *codegen() override {
-        llvm::Value *V = this->owner->_namedValues[this->_name];
+        llvm::Value *V = this->env_->getValue(this->name_);
         if (!V) LogErrorV<CT>("unknown variable name");
         return V;
     }
 
 private:
-    std::string _name;
+    std::string name_;
 };
 
 // CallExprAST=========================================================================
@@ -64,36 +68,37 @@ private:
 template <CompilerType CT> class BinaryExprAST : public ExprAST<CT> {
 public:
     BinaryExprAST(char op, std::unique_ptr<ExprAST<CT>> LHS,
-                  std::unique_ptr<ExprAST<CT>> RHS, Parser<CT> *parser)
-        : ExprAST<CT>(parser), _op(op), _lhs(std::move(LHS)),
-          _rhs(std::move(RHS)) {}
+                  std::unique_ptr<ExprAST<CT>> RHS, ParserEnv<CT> *env)
+        : ExprAST<CT>(env), op_(op), lhs_(std::move(LHS)),
+          rhs_(std::move(RHS)) {}
     llvm::Value *codegen() override {
-        llvm::Value *l = this->_lhs->codegen();
-        llvm::Value *r = this->_rhs->codegen();
+        llvm::Value *l = this->lhs_->codegen();
+        llvm::Value *r = this->rhs_->codegen();
         if (!l || !r) return nullptr;
 
-        switch (this->_op) {
-            case ('+'):
-                // we give each val IR a name
-                return this->owner->_builder->CreateFAdd(l, r, "addtmp");
-            case ('-'):
-                return this->owner->_builder->CreateFSub(l, r, "subtmp");
-            case ('*'):
-                return this->owner->_builder->CreateFMul(l, r, "multmp");
-            case ('<'):
-                l = this->owner->_builder->CreateFCmpULT(l, r, "cmptmp");
-                // Convert bool 0/1 to double 0.0 or 1.0
-                return this->owner->_builder->CreateUIToFP(
-                    l, llvm::Type::getDoubleTy(*(this->owner)->_theContext),
-                    "booltmp");
-            default:
-                return LogErrorV<CT>("invalid binary op");
+        llvm::IRBuilder<> *curBuilder = this->env_->getBuilder();
+        switch (this->op_) {
+        case ('+'):
+            // we give each val IR a name
+            return curBuilder->CreateFAdd(l, r, "addtmp");
+        case ('-'):
+            return curBuilder->CreateFSub(l, r, "subtmp");
+        case ('*'):
+            return curBuilder->CreateFMul(l, r, "multmp");
+        case ('<'):
+            l = curBuilder->CreateFCmpULT(l, r, "cmptmp");
+            // Convert bool 0/1 to double 0.0 or 1.0
+            return curBuilder->CreateUIToFP(
+                l, llvm::Type::getDoubleTy(*(this->env_->getContext())),
+                "booltmp");
+        default:
+            return LogErrorV<CT>("invalid binary op");
         }
     }
 
 private:
-    char _op;
-    std::unique_ptr<ExprAST<CT>> _lhs, _rhs;
+    char op_;
+    std::unique_ptr<ExprAST<CT>> lhs_, rhs_;
 };
 
 // Expression class for function calls
@@ -101,31 +106,31 @@ template <CompilerType CT> class CallExprAST : public ExprAST<CT> {
 public:
     CallExprAST(const std::string &callee,
                 std::vector<std::unique_ptr<ExprAST<CT>>> args,
-                Parser<CT> *parser)
-        : ExprAST<CT>(parser), _callee(callee), _args(std::move(args)) {}
+                ParserEnv<CT> *env)
+        : ExprAST<CT>(env), callee_(callee), args_(std::move(args)) {}
 
     llvm::Value *codegen() override {
         llvm::Function *calleeF;
         if constexpr (CT == CompilerType::AOT) {
-            calleeF = this->owner->_theModule->getFunction(this->_callee);
+            calleeF = this->env_->getModule()->getFunction(this->callee_);
         } else if constexpr (CT == CompilerType::JIT) {
-            calleeF = this->owner->getFunction(this->_callee);
+            calleeF = this->env_->getFunction(this->callee_);
         }
 
         if (!calleeF) return LogErrorV<CT>("unknown function referenced");
-        if (calleeF->arg_size() != this->_args.size())
+        if (calleeF->arg_size() != this->args_.size())
             return LogErrorV<CT>("incorrect number of args passed");
 
         std::vector<llvm::Value *> argsV;
-        for (unsigned i = 0, e = this->_args.size(); i != e; ++i) {
-            argsV.push_back(this->_args[i]->codegen());
+        for (unsigned i = 0, e = this->args_.size(); i != e; ++i) {
+            argsV.push_back(this->args_[i]->codegen());
             if (!argsV.back()) return nullptr;
         }
 
-        return this->owner->_builder->CreateCall(calleeF, argsV, "calltmp");
+        return this->env_->getBuilder()->CreateCall(calleeF, argsV, "calltmp");
     }
 
 private:
-    std::string _callee;
-    std::vector<std::unique_ptr<ExprAST<CT>>> _args;
+    std::string callee_;
+    std::vector<std::unique_ptr<ExprAST<CT>>> args_;
 };

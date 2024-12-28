@@ -1,7 +1,7 @@
 /*
  * File: function_ast.h
  * Path:  /ast/function_ast.h
- * Module: src
+ * Module: ast
  * Lang: C/C++
  * Created Date: Friday, December 13th 2024, 3:04:41 pm
  * Author: orion
@@ -15,20 +15,21 @@
 // This class represents a function definition
 #pragma once
 #include "compiler_type.h"
-#include "logger.h"
 #include "llvm-18/llvm/IR/Function.h"
+#include "logger.h"
+#include <llvm-18/llvm/IR/IRBuilder.h>
 #include <llvm-18/llvm/IR/Verifier.h>
 #include <memory>
 
-template <CompilerType CT> class Parser;
+template <CompilerType CT> class ParserEnv;
 template <CompilerType CT> class PrototypeAST;
 template <CompilerType CT> class ExprAST;
 
 template <CompilerType CT> class FunctionAST {
 public:
     FunctionAST(std::unique_ptr<PrototypeAST<CT>> proto,
-                std::unique_ptr<ExprAST<CT>> body, Parser<CT> *parser)
-        : _proto(std::move(proto)), _body(std::move(body)), owner(parser) {}
+                std::unique_ptr<ExprAST<CT>> body, ParserEnv<CT> *env)
+        : proto_(std::move(proto)), body_(std::move(body)), env_(env) {}
 
     llvm::Function *codegen() {
 
@@ -37,11 +38,11 @@ public:
 
             // First, check for an existing function from a previous 'extern'
             //  declaration.
-            theFunction = owner->_theModule->getFunction(_proto->getName());
+            theFunction = env_->getModule()->getFunction(proto_->getName());
             bool nameSame = true, argsSame = true;
             if (theFunction) {
                 const auto &fargs = theFunction->args();
-                const auto &pargs = _proto->getArgs();
+                const auto &pargs = proto_->getArgs();
                 int tempi = 0;
                 if (theFunction->arg_size() == pargs.size()) {
                     for (auto &arg : fargs) {
@@ -58,7 +59,7 @@ public:
                 nameSame = false;
             }
 
-            if (!nameSame || !argsSame) theFunction = _proto->codegen();
+            if (!nameSame || !argsSame) theFunction = proto_->codegen();
             if (!theFunction) return nullptr;
 
             // we want to assert that the function is empty (i.e. has no body
@@ -74,27 +75,28 @@ public:
             // Firstly, transfer ownership of the prototype to the
             // FunctionProtos map,
             //  but keep a reference to it for use below.
-            auto &p = *_proto;
-            owner->_functionProtos[_proto->getName()] = std::move(_proto);
-            theFunction = owner->getFunction(p.getName());
+            auto &p = *proto_;
+            env_->addProto(proto_);
+            theFunction = env_->getFunction(p.getName());
             if (!theFunction) return nullptr;
         }
 
         // Create a new basic block to start insertion into.
-        llvm::BasicBlock *bb =
-            llvm::BasicBlock::Create(*owner->_theContext, "entry", theFunction);
-        owner->_builder->SetInsertPoint(bb);
+        llvm::IRBuilder<> *curBuilder = env_->getBuilder();
+        llvm::BasicBlock *bb = llvm::BasicBlock::Create(*(env_->getContext()),
+                                                        "entry", theFunction);
+        curBuilder->SetInsertPoint(bb);
 
         // record the function arguments in the namedvalues table
-        owner->_namedValues.clear();
+        env_->clearNamedValues();
         for (auto &arg : theFunction->args()) {
-            owner->_namedValues[std::string(arg.getName())] = &arg;
+            env_->setValue(std::string(arg.getName()), &arg);
         }
-        if (llvm::Value *retVal = _body->codegen()) {
-            owner->_builder->CreateRet(retVal);
+        if (llvm::Value *retVal = body_->codegen()) {
+            curBuilder->CreateRet(retVal);
             llvm::verifyFunction(*theFunction);
             // after verifying consistency, do optimizations
-            owner->runOpt(theFunction);
+            env_->runOpt(theFunction);
             return theFunction;
         }
 
@@ -106,9 +108,9 @@ public:
         theFunction->eraseFromParent();
         return nullptr;
     }
-    Parser<CT> *owner;
 
-protected:
-    std::unique_ptr<PrototypeAST<CT>> _proto;
-    std::unique_ptr<ExprAST<CT>> _body;
+private:
+    ParserEnv<CT> *env_;
+    std::unique_ptr<PrototypeAST<CT>> proto_;
+    std::unique_ptr<ExprAST<CT>> body_;
 };

@@ -1,7 +1,7 @@
 /*
  * File: driver.h
- * Path: /driver.h
- * Module: src
+ * Path: /parser/driver.h
+ * Module: parser
  * Lang: C/C++
  * Created Date: Saturday, December 14th 2024, 6:08:04 pm
  * Author: orion
@@ -18,10 +18,10 @@
 
 template <CompilerType CT> class Driver {
 public:
-    Driver(Parser<CT> *parser) : _parser(parser) {}
+    Driver(Parser<CT> *parser) : parser_(parser), pEnv_(parser->getEnv()) {}
     // high level handling----------------------------------------------------
     void handleDefinition() {
-        if (auto defAST = _parser->parseDefinition()) {
+        if (auto defAST = parser_->parseDefinition()) {
             if (auto *defIR = defAST->codegen()) {
                 fprintf(stderr, "Parsed a function definition.\n");
                 defIR->print(llvm::errs());
@@ -29,41 +29,36 @@ public:
                 if constexpr (CT == CompilerType::JIT) {
                     // transfer the newly defined function to the JIT
                     //  and open a new module
-                    auto tsm = llvm::orc::ThreadSafeModule(
-                        std::move(_parser->_theModule),
-                        std::move(_parser->_theContext));
-                    this->_exitOnErr(
-                        _parser->_theJIT->addModule(std::move(tsm)));
-                    _parser->initializeModuleAndPassManager();
+                    pEnv_->transfer(nullptr);
                 }
             }
         } else {
             // Skip token for error recovery.
-            _parser->getNextToken();
+            parser_->getNextToken();
         }
     }
 
     void handleExtern() {
-        if (auto protoAST = _parser->parseExtern()) {
+        if (auto protoAST = parser_->parseExtern()) {
             if (auto *protoIR = protoAST->codegen()) {
                 fprintf(stderr, "Read an extern: ");
                 protoIR->print(llvm::errs());
                 fprintf(stderr, "\n");
                 if constexpr (CT == CompilerType::JIT) {
                     // add the prototype to _functionProtos
-                    _parser->_functionProtos[protoAST->getName()] =
-                        std::move(protoAST);
+                    pEnv_->addProto(protoAST);
                 }
             }
         } else {
             // Skip token for error recovery.
-            _parser->getNextToken();
+            parser_->getNextToken();
         }
     }
 
     void handleTopLevelExpression() {
-        // Evaluate a top-level expression into an anonymous function.
-        if (auto fnAST = _parser->parseTopLevelExpr()) {
+        // Evaluate a top-level expression into an anonymous function.]
+        llvm::orc::KaleidoscopeJIT *pJIT = pEnv_->getJIT();
+        if (auto fnAST = parser_->parseTopLevelExpr()) {
             if (auto *fnIR = fnAST->codegen()) {
                 // if (fnAST->codegen()) {
                 fprintf(stderr, "Read a top-level expr: ");
@@ -71,24 +66,15 @@ public:
                 fprintf(stderr, "\n");
                 if constexpr (CT == CompilerType::JIT) {
                     // create a ResourceTracker to track JIT's memory allocated
-                    // to
-                    //  our anonymous expression, which we can free after
+                    //  to our anonymous expression, which we can free after
                     //  execution
-                    auto rt = _parser->_theJIT->getMainJITDylib()
-                                  .createResourceTracker();
-                    auto tsm = llvm::orc::ThreadSafeModule(
-                        std::move(_parser->_theModule),
-                        std::move(_parser->_theContext));
+                    auto rt = pJIT->getMainJITDylib().createResourceTracker();
 
-                    // addModule triggers code generation for all the functions
-                    //  in the module, and accepts a ResourceTracker which can
-                    //  be used to remove the module from the JIT later.
-                    _exitOnErr(_parser->_theJIT->addModule(std::move(tsm), rt));
-                    _parser->initializeModuleAndPassManager();
+                    pEnv_->transfer(&rt);
 
                     // search the jit for the _anon_expr symbol
                     llvm::orc::ExecutorSymbolDef exprSymbol =
-                        _exitOnErr(_parser->_theJIT->lookup("__anon_expr"));
+                        exitOnErr_(pJIT->lookup("__anon_expr"));
                     // assert(exprSymbol && "Function not found");
 
                     // Get the symbol's address and cast it to the right type
@@ -101,7 +87,7 @@ public:
 
                     // remove the anonymous expression (the whole module) from
                     // the JIT
-                    _exitOnErr(rt->remove());
+                    exitOnErr_(rt->remove());
                 } else {
                     // remove the anonymous expression
                     fnIR->eraseFromParent();
@@ -109,7 +95,7 @@ public:
             }
         } else {
             // Skip token for error recovery.
-            _parser->getNextToken();
+            parser_->getNextToken();
         }
     }
 
@@ -118,18 +104,24 @@ public:
     void mainLoop() {
         while (true) {
             fprintf(stderr, "ready> ");
-            switch (_parser->_curTok) {
-            case tok_eof:
+            switch (parser_->getCurToken()) {
+            case tokEof:
                 return;
             case ';': // ignore top-level semicolons.
-                _parser->getNextToken();
+                parser_->getNextToken();
                 break;
-            case tok_def:
+            case tokDef:
                 handleDefinition();
                 break;
-            case tok_extern:
+            case tokExtern:
                 handleExtern();
                 break;
+                // case tok_if:
+
+                // case tok_then:
+
+                // case tok_else:
+
             default:
                 handleTopLevelExpression();
                 break;
@@ -138,6 +130,7 @@ public:
     }
 
 private:
-    Parser<CT> *_parser;
-    llvm::ExitOnError _exitOnErr;
+    Parser<CT> *parser_;
+    ParserEnv<CT> *pEnv_;
+    llvm::ExitOnError exitOnErr_;
 };

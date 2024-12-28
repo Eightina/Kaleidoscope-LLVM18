@@ -1,23 +1,26 @@
 /*
  * File: token.h
- * Path: /token.h
- * Module: src
+ * Path: /lexer/token.h
+ * Module: lexer
  * Lang: C/C++
  * Created Date: Saturday, December 14th 2024, 12:54:34 am
  * Author: orion
  * Email: orion.que@outlook.com
  * ----------------------------------------------
- *    ____                  __  _          
+ *    ____                  __  _
      / __/__ _  _____ ___  / /_(_)__  ___ _
     _\ \/ -_) |/ / -_) _ \/ __/ / _ \/ _ `/
-   /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/ 
+   /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/
  */
 #pragma once
 
 enum Token {
-    tok_eof = -1,
-    tok_def = -2,
-    tok_extern = -3,
-    tok_identifier = -4,
-    tok_number = -5,
+    tokEof = -1,
+    tokDef = -2,
+    tokExtern = -3,
+    tokIdentifier = -4,
+    tokNumber = -5,
+    tokIf = -6,
+    tokThen = -7,
+    tokElse = -8,
 };

@@ -1,7 +1,7 @@
 /*
  * File: parser.h
- * Path: /parser.h
- * Module: include
+ * Path: /parser/parser.h
+ * Module: parser
  * Lang: C/C++
  * Created Date: Sunday, November 17th 2024, 12:13:08 am
  * Author: orion
@@ -21,57 +21,21 @@
 #include "compiler_type.h"
 #include "lexer.h"
 #include "logger.h"
+#include "parser_env.h"
 #include "token.h"
 #include <cassert>
 #include <cstdio>
 #include <iostream>
-#include <llvm-18/llvm/ADT/APFloat.h>
-#include <llvm-18/llvm/ADT/STLExtras.h>
-#include <llvm-18/llvm/IR/BasicBlock.h>
-#include <llvm-18/llvm/IR/Constants.h>
-#include <llvm-18/llvm/IR/DerivedTypes.h>
-#include <llvm-18/llvm/IR/Function.h>
-#include <llvm-18/llvm/IR/IRBuilder.h>
-#include <llvm-18/llvm/IR/LLVMContext.h>
-#include <llvm-18/llvm/IR/Module.h>
-#include <llvm-18/llvm/IR/PassInstrumentation.h>
-#include <llvm-18/llvm/IR/PassManager.h>
-#include <llvm-18/llvm/IR/Type.h>
-#include <llvm-18/llvm/IR/Value.h>
-#include <llvm-18/llvm/IR/Verifier.h>
-#include <llvm-18/llvm/Pass.h>
-#include <llvm-18/llvm/Passes/PassBuilder.h>
-#include <llvm-18/llvm/Passes/StandardInstrumentations.h>
-#include <llvm-18/llvm/Support/Error.h>
 #include <llvm-18/llvm/Support/TargetSelect.h>
-#include <llvm-18/llvm/Support/raw_ostream.h>
-#include <llvm-18/llvm/Target/TargetMachine.h>
-#include <llvm-18/llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h>
-#include <llvm-18/llvm/Transforms/InstCombine/InstCombine.h>
-#include <llvm-18/llvm/Transforms/Scalar.h>
-#include <llvm-18/llvm/Transforms/Scalar/GVN.h>
-#include <llvm-18/llvm/Transforms/Scalar/Reassociate.h>
-#include <llvm-18/llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <map>
 #include <memory>
 #include <vector>
-
-// class Lexer;
-// class ExprAST<CT>;
-// class NumberExprAST;
-// class PrototypeAST;
-// class VariableExprAST;
-// class CallExprAST_AOT;
-// class CallExprAST_JIT;
-// class BinaryExprAST;
-// class FunctionAST_AOT;
-// class FunctionAST_JIT;
 
 template <CompilerType CT> class Parser {
 public:
     Parser() { initialize(); }
 
-    Parser(Lexer &lexer) : _lexer(std::move(lexer)) { initialize(); }
+    Parser(Lexer &lexer) : lexer_(std::move(lexer)) { initialize(); }
 
     void test_lexer() {
         while (true) {
@@ -79,17 +43,17 @@ public:
         }
     }
 
-    int getNextToken() { return _curTok = _lexer.gettok(); }
+    int getNextToken() { return curTok_ = lexer_.getTok(); }
 
     // In order to parse binary expression correctly:
     // "x+y*z" -> "x+(y*z)"
     // uses the precedence of binary operators to guide recursion
     // Operator-Precedence Parsing
     int getTokPrecedence() {
-        if (!isascii(_curTok)) return -1;
+        if (!isascii(curTok_)) return -1;
 
         // make sure it is a declared binop
-        int tokPrec = _binoPrecedence[_curTok];
+        int tokPrec = binoPrecedence_[curTok_];
         if (tokPrec <= 0) return -1;
         return tokPrec;
     }
@@ -107,7 +71,8 @@ public:
     // handling basic expression units-----------------------------------------
     /// numberexpr ::= number
     std::unique_ptr<ExprAST<CT>> parseNumberExpr() {
-        auto result = std::make_unique<NumberExprAST<CT>>(_lexer._numVal, this);
+        auto result =
+            std::make_unique<NumberExprAST<CT>>(lexer_.getNumVal(), env_.get());
         getNextToken();
         return std::move(result);
     }
@@ -116,7 +81,7 @@ public:
         getNextToken();
         auto v = parseExpression();
         if (!v) return nullptr;
-        if (_curTok != ')') return LogErr<CT>("expected ')'");
+        if (curTok_ != ')') return LogErr<CT>("expected ')'");
         getNextToken();
         return v;
     }
@@ -124,23 +89,23 @@ public:
     // ::= identifier
     // ::= identifier '(' expression* ')'
     std::unique_ptr<ExprAST<CT>> parseIdentifierExpr() {
-        std::string idName = _lexer._identifierStr;
+        std::string idName(lexer_.getIdentifierStr());
         getNextToken(); // take in identifier
-        if (_curTok != '(')
-            return std::make_unique<VariableExprAST<CT>>(idName, this);
+        if (curTok_ != '(')
+            return std::make_unique<VariableExprAST<CT>>(idName, env_.get());
 
         getNextToken(); // take in '('
         std::vector<std::unique_ptr<ExprAST<CT>>> args;
-        if (_curTok != ')') { // take in expression (args)
+        if (curTok_ != ')') { // take in expression (args)
             while (true) {
                 if (auto arg = parseExpression())
                     args.push_back(std::move(arg));
                 else
                     return nullptr;
 
-                if (_curTok == ')') break;
+                if (curTok_ == ')') break;
 
-                if (_curTok != ',')
+                if (curTok_ != ',')
                     return LogErr<CT>("expected ')' or ',' in arg list");
 
                 getNextToken(); // take in ','
@@ -148,19 +113,20 @@ public:
         }
 
         getNextToken(); // take in ')'
-        return std::make_unique<CallExprAST<CT>>(idName, std::move(args), this);
+        return std::make_unique<CallExprAST<CT>>(idName, std::move(args),
+                                                 env_.get());
     }
     /// primary
     /// ::= identifierexpr
     /// ::= numberexpr
     /// ::= parenexpr
     std::unique_ptr<ExprAST<CT>> parsePrimary() {
-        switch (_curTok) {
+        switch (curTok_) {
         default:
             return LogErr<CT>("unknown token when expection an expression");
-        case tok_identifier:
+        case tokIdentifier:
             return parseIdentifierExpr();
-        case tok_number:
+        case tokNumber:
             return parseNumberExpr();
         case '(':
             return parseParenExpr();
@@ -204,7 +170,7 @@ public:
             //  the token runs out of operators
             if (tokPrec < exprPrec) return lhs;
             // else we know that this token is binary and should be included
-            int binOp = _curTok;
+            int binOp = curTok_;
 
             // Then get next token and parse the primary expression
             //  after the binary operator
@@ -221,8 +187,8 @@ public:
             }
 
             // Merge LHS/RHS.
-            lhs = std::make_unique<BinaryExprAST<CT>>(binOp, std::move(lhs),
-                                                      std::move(rhs), this);
+            lhs = std::make_unique<BinaryExprAST<CT>>(
+                binOp, std::move(lhs), std::move(rhs), env_.get());
             // This will turn "a+b+" into "(a+b)" and execute the next iteration
             // of
             //  the loop, with "+" as the current token
@@ -236,29 +202,29 @@ public:
     /// ::= id '(' id* ')'
     std::unique_ptr<PrototypeAST<CT>> parsePrototype() {
         // func name
-        if (_curTok != tok_identifier) {
+        if (curTok_ != tokIdentifier) {
             return LogErrP<CT>("expected function name in function prototype");
         }
-        std::string fnName = _lexer._identifierStr;
+        std::string fnName(lexer_.getIdentifierStr());
 
         // '(' before arg list
         getNextToken();
-        if (_curTok != '(')
+        if (curTok_ != '(')
             return LogErrP<CT>("expected '(' in function prototype");
 
         // arglist
         std::vector<std::string> argNames;
-        while (getNextToken() == tok_identifier)
-            argNames.push_back(_lexer._identifierStr);
+        while (getNextToken() == tokIdentifier)
+            argNames.push_back(lexer_.getIdentifierStr());
 
         // ')' after arg list
-        if (_curTok != ')')
+        if (curTok_ != ')')
             return LogErrP<CT>("expected ')' in function prototype");
 
         getNextToken();
         // finish
         return std::make_unique<PrototypeAST<CT>>(fnName, std::move(argNames),
-                                                  this);
+                                                  env_.get());
         // notice:
         //  If we want to move the argNames out, we need to call std::move
         //  here. The construction func of PrototypeAST receives
@@ -286,7 +252,7 @@ public:
         auto E = parseExpression();
         if (!E) return nullptr;
         return std::make_unique<FunctionAST<CT>>(std::move(proto), std::move(E),
-                                                 this);
+                                                 env_.get());
     }
 
     /// external ::= 'extern' prototype
@@ -305,15 +271,12 @@ public:
             // std::make_unique<PrototypeAST>("", std::vector<std::string>(),
             // this);
             std::make_unique<PrototypeAST<CT>>(
-                "__anon_expr", std::vector<std::string>(), this);
+                "__anon_expr", std::vector<std::string>(), env_.get());
         return std::make_unique<FunctionAST<CT>>(std::move(proto), std::move(E),
-                                                 this);
+                                                 env_.get());
     }
 
     // helper func----------------------------------------------------
-    void runOpt(llvm::Function *theFunction) {
-        _theFPM->run(*theFunction, *_theFAM);
-    }
 
     void initialize() {
         if constexpr (CT == CompilerType::JIT) {
@@ -325,88 +288,24 @@ public:
         fprintf(stderr, "ready> ");
         getNextToken();
 
-        if constexpr (CT == CompilerType::JIT)
-            _theJIT = _exitOnErr(llvm::orc::KaleidoscopeJIT::Create());
-
-        initializeModuleAndPassManager();
+        env_ = std::make_unique<ParserEnv<CT>>();
+        env_->initialize();
     }
 
-    void initializeModuleAndPassManager() {
-        // open a new context and module---------------------------------------
-        _theContext = std::make_unique<llvm::LLVMContext>();
-        _theModule =
-            std::make_unique<llvm::Module>("KaleidoScopeJIT", *_theContext);
-        if constexpr (CT == CompilerType::JIT)
-            _theModule->setDataLayout(_theJIT->getDataLayout());
-
-        // create a new builder for the module---------------------------------
-        _builder = std::make_unique<llvm::IRBuilder<>>(*_theContext);
-        // create new pass and analysis managers
-        _theFPM = std::make_unique<llvm::FunctionPassManager>();
-        _theLAM = std::make_unique<llvm::LoopAnalysisManager>();
-        _theFAM = std::make_unique<llvm::FunctionAnalysisManager>();
-        _theCGAM = std::make_unique<llvm::CGSCCAnalysisManager>();
-        _theMAM = std::make_unique<llvm::ModuleAnalysisManager>();
-        _thePIC = std::make_unique<llvm::PassInstrumentationCallbacks>();
-        _theSI = std::make_unique<llvm::StandardInstrumentations>(
-            *_theContext, /*DebugLogging*/ true);
-        _theSI->registerCallbacks(*_thePIC, _theMAM.get());
-
-        // Add transform passes.-----------------------------------------------
-        // Do simple "peephole" optimizations and bit-twiddling optzns.
-        _theFPM->addPass(llvm::InstCombinePass());
-        // _theFPM->addPass(llvm::AggressiveInstCombinePass());
-        // Reassociate expressions.
-        _theFPM->addPass(llvm::ReassociatePass());
-        // Eliminate Common SubExpressions.
-        _theFPM->addPass(llvm::GVNPass());
-        // Simplify the control flow graph (deleting unreachable blocks, etc).
-        _theFPM->addPass(llvm::SimplifyCFGPass());
-        // // Run InstCombine again to catch any new opportunities.
-        // _theFPM->addPass(llvm::InstCombinePass());
-
-        // Register analysis passes used in these transform passes.------------
-        _pb.registerModuleAnalyses(*_theMAM);
-        _pb.registerFunctionAnalyses(*_theFAM);
-        _pb.crossRegisterProxies(*_theLAM, *_theFAM, *_theCGAM, *_theMAM);
+    int getCurToken() const __attribute__((always_inline)) { return curTok_; }
+    ParserEnv<CT> *getEnv() const __attribute__((always_inline)) {
+        return env_.get();
     }
 
-    llvm::Function *getFunction(std::string name) {
-        // check if the function has been added to the current module
-        if (auto *f = _theModule->getFunction(name)) return f;
-        // if not, check whether we can codegenthe declaration from prototype
-        auto fi = _functionProtos.find(name);
-        if (fi != _functionProtos.end()) return fi->second->codegen();
-
-        // if no existing prototype exists, return null;
-        return nullptr;
-    }
-
-    // public:
-    Lexer _lexer;
-    int _curTok;
+private:
+    Lexer lexer_;
+    int curTok_;
     // this holds the precedence for each binary operator that we define
-    static std::map<char, int> _binoPrecedence;
-    std::unique_ptr<llvm::LLVMContext> _theContext;
-    std::unique_ptr<llvm::IRBuilder<>> _builder;
-    std::unique_ptr<llvm::Module> _theModule;
-    std::map<std::string, llvm::Value *> _namedValues;
-    std::map<std::string, std::unique_ptr<PrototypeAST<CT>>> _functionProtos;
-    // for optimizations and JIT
-    std::unique_ptr<llvm::FunctionPassManager> _theFPM;
-    std::unique_ptr<llvm::LoopAnalysisManager> _theLAM;
-    std::unique_ptr<llvm::FunctionAnalysisManager> _theFAM;
-    std::unique_ptr<llvm::CGSCCAnalysisManager> _theCGAM;
-    std::unique_ptr<llvm::ModuleAnalysisManager> _theMAM;
-    std::unique_ptr<llvm::PassInstrumentationCallbacks> _thePIC;
-    std::unique_ptr<llvm::StandardInstrumentations> _theSI;
-    std::unique_ptr<llvm::orc::KaleidoscopeJIT> _theJIT;
-    //
-    llvm::PassBuilder _pb;
-    llvm::ExitOnError _exitOnErr;
+    static std::map<char, int> binoPrecedence_;
+    std::unique_ptr<ParserEnv<CT>> env_;
 };
 
 // Install standard binary operators: 1 is lowest precedence
 template <CompilerType CT>
-inline std::map<char, int> Parser<CT>::_binoPrecedence{
+inline std::map<char, int> Parser<CT>::binoPrecedence_{
     {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};

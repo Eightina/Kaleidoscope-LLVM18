@@ -1,9 +1,13 @@
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ast)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lexer)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/parser)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/ast)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lexer)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/parser)
 
-add_executable(aot_parser lexer.cpp main_aot.cpp)
-add_executable(jit_parser lexer.cpp main_jit.cpp)
+add_executable(aot_parser ./lexer/lexer.cpp main_aot.cpp)
+add_executable(jit_parser ./lexer/lexer.cpp main_jit.cpp)
 target_include_directories(aot_parser PRIVATE ${LLVM_INCLUDE_DIRS})
 target_include_directories(jit_parser PRIVATE ${LLVM_INCLUDE_DIRS})
 
@@ -17,7 +21,7 @@ target_include_directories(jit_parser PRIVATE ${LLVM_INCLUDE_DIRS})
 execute_process(
     COMMAND llvm-config-18 --cxxflags --ldflags --system-libs --libs core
     OUTPUT_VARIABLE LLVM_CONFIG_FLAGS
-    OUTPUT_STRIP_TRAILING_WHITESPACE # 移除尾部空白字符
+    OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 # split compiling and linking flags
 set(CXX_FLAGS "")

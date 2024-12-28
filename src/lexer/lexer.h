@@ -1,7 +1,7 @@
 /*
  * File: lexer.h
- * Path: /lexer.h
- * Module: include
+ * Path: /lexer/lexer.h
+ * Module: lexer
  * Lang: C/C++
  * Created Date: Saturday, November 16th 2024, 10:47:20 pm
  * Author: orion
@@ -18,10 +18,12 @@
 class Lexer {
 public:
     // gettok: returns the token from string input
-    int gettok();
-    double _numVal = .0;
-    std::string _identifierStr = "";
+    int getTok();
+    double getNumVal() const __attribute__((always_inline));
+    const std::string &getIdentifierStr() const __attribute__((always_inline));
 
 private:
-    int _lastChar = ' ';
+    int lastChar_ = ' ';
+    double numVal_ = .0;
+    std::string identifierStr_ = "";
 };
