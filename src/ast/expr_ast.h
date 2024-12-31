@@ -15,10 +15,14 @@
 #pragma once
 #include "compiler_type.h"
 #include "logger.h"
+#include <llvm-18/llvm/ADT/APFloat.h>
+#include <llvm-18/llvm/IR/BasicBlock.h>
 #include <llvm-18/llvm/IR/Constants.h>
 #include <llvm-18/llvm/IR/Function.h>
 #include <llvm-18/llvm/IR/IRBuilder.h>
+#include <llvm-18/llvm/IR/LLVMContext.h>
 #include <llvm-18/llvm/IR/Value.h>
+#include <memory>
 
 // template <CompilerType CT> class Parser;
 template <CompilerType CT> class ParserEnv;
@@ -133,4 +137,85 @@ public:
 private:
     std::string callee_;
     std::vector<std::unique_ptr<ExprAST<CT>>> args_;
+};
+
+template <CompilerType CT> class IfExprAST : public ExprAST<CT> {
+public:
+    IfExprAST(std::unique_ptr<ExprAST<CT>> condp,
+              std::unique_ptr<ExprAST<CT>> thenp, ParserEnv<CT> *env)
+        : ExprAST<CT>(env), cond_(std::move(condp)), then_(std::move(thenp)) {
+        else_ = nullptr;
+    }
+
+    IfExprAST(std::unique_ptr<ExprAST<CT>> condp,
+              std::unique_ptr<ExprAST<CT>> thenp,
+              std::unique_ptr<ExprAST<CT>> elsep, ParserEnv<CT> *env)
+        : ExprAST<CT>(env), cond_(std::move(condp)), then_(std::move(thenp)),
+          else_(std::move(elsep)) {}
+
+    llvm::Value *codegen() override {
+        // We are creating a struction like: Funciton-BBlock-code
+
+        llvm::Value *condV = cond_->codegen();
+        if (!condV) return nullptr;
+
+        // convert condition to a bool by comparing non-equal to 0.0
+        llvm::IRBuilder<> *curBuilder = this->env_->getBuilder();
+        llvm::LLVMContext *curContext = this->env_->getContext();
+        // evaluate "if"
+        condV = curBuilder->CreateFCmpONE(
+            condV, llvm::ConstantFP::get(*curContext, llvm::APFloat(0.0)));
+
+        // Create blocks for the then and else cases.
+        // Insert the 'then' block at the end of the function.
+        // Firstly get the current Function object that is being built
+        llvm::Function *theFunction = curBuilder->GetInsertBlock()->getParent();
+        // parent = theFunction ----> inserted into the end of "theFunction"
+        llvm::BasicBlock *thenBB =
+            llvm::BasicBlock::Create(*curContext, "then", theFunction);
+        // parent = nullptr ----> not yet inserted into the function
+        llvm::BasicBlock *elseBB =
+            llvm::BasicBlock::Create(*curContext, "else");
+        llvm::BasicBlock *mergeBB =
+            llvm::BasicBlock::Create(*curContext, "ifcont");
+        // Emit the conditional branch. Creating new blocks does not implicitly
+        //  affect the IRBuilder, so it is still inserting into the block that
+        //  the condition went into
+        curBuilder->CreateCondBr(condV, thenBB, elseBB);
+
+        // Emit "then" block. -------------------------------------------------
+        // Move the builder to start inserting into the end
+        //  of the "then" block. Due to thenBB being empty, it is also the
+        //  beginning
+        curBuilder->SetInsertPoint(thenBB);
+        llvm::Value *thenV = then_->codegen();
+        if (!thenV) return nullptr;
+        // Create an unconditional branch to finish off the "then" block:
+        //  LLVM IR requires all basic blocks to be “terminated” with
+        //  a control flow instruction such as return or branch
+        curBuilder->CreateBr(mergeBB);
+        // Codegen of 'Then' can change current block, update ThenBB for PHI.
+        thenBB = curBuilder->GetInsertBlock();
+
+        // Emit "else" block. -------------------------------------------------
+        theFunction->insert(theFunction->end(), elseBB);
+        curBuilder->SetInsertPoint(elseBB);
+        llvm::Value* elseV;
+        if (else_ != nullptr) elseV = else_->codegen();
+        else elseV = llvm::ConstantFP::get(*curContext, llvm::APFloat(0.0));
+        curBuilder->CreateBr(mergeBB);
+        elseBB = curBuilder->GetInsertBlock();
+
+        // Emit "merge" block. -------------------------------------------------
+        theFunction->insert(theFunction->end(), mergeBB);
+        curBuilder->SetInsertPoint(mergeBB);
+        llvm::PHINode *pn = curBuilder->CreatePHI(llvm::Type::getDoubleTy(*curContext), 2, "iftmp");
+        pn->addIncoming(thenV, thenBB);
+        pn->addIncoming(elseV, elseBB);
+
+        return pn;
+    }
+
+private:
+    std::unique_ptr<ExprAST<CT>> cond_, then_, else_;
 };

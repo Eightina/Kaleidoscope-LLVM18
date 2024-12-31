@@ -96,7 +96,7 @@ public:
             curBuilder->CreateRet(retVal);
             llvm::verifyFunction(*theFunction);
             // after verifying consistency, do optimizations
-            env_->runOpt(theFunction);
+            if (env_->getEnableOpt()) env_->runOpt(theFunction);
             return theFunction;
         }
 

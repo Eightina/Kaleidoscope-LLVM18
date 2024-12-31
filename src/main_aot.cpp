@@ -14,10 +14,12 @@
  */
 #include "compiler_type.h"
 #include "driver.h"
+#include "lexer.h"
 #include "parser.h"
 
 int main() {
-    Parser<CompilerType::AOT> p;
+    // Lexer l;
+    Parser<CompilerType::AOT> p(true);
     Driver<CompilerType::AOT> driver(&p);
     ParserEnv<CompilerType::AOT> *pEnv = p.getEnv();
 

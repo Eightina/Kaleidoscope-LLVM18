@@ -17,7 +17,7 @@
 #include "parser.h"
 
 int main() {
-    Parser<CompilerType::JIT> p;
+    Parser<CompilerType::JIT> p(false);
     Driver<CompilerType::JIT> driver(&p);
     ParserEnv<CompilerType::JIT> *pEnv = p.getEnv();
 
@@ -28,3 +28,4 @@ int main() {
 
     return 0;
 }
+ 

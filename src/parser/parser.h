@@ -33,9 +33,14 @@
 
 template <CompilerType CT> class Parser {
 public:
-    Parser() { initialize(); }
+    Parser() : enableOpt_(false) { initialize(); }
 
-    Parser(Lexer &lexer) : lexer_(std::move(lexer)) { initialize(); }
+    Parser(bool enableOpt) : enableOpt_(enableOpt) { initialize(); }
+
+    Parser(bool enableOpt, Lexer &lexer)
+        : enableOpt_(enableOpt), lexer_(std::move(lexer)) {
+        initialize();
+    }
 
     void test_lexer() {
         while (true) {
@@ -130,6 +135,8 @@ public:
             return parseNumberExpr();
         case '(':
             return parseParenExpr();
+        case tokIf:
+            return parseIfExpr();
         }
     }
     /// expression
@@ -260,8 +267,38 @@ public:
         getNextToken();
         return parsePrototype();
     }
+    //-------------------------------------------------------------------------
 
+    // handling control flows--------------------------------------------------
+    std::unique_ptr<ExprAST<CT>> parseIfExpr() {
+        getNextToken(); // take in "if" & move on
+        auto cond = parseExpression();
+        if (!cond) return nullptr;
+
+        if (curTok_ != tokThen) {
+            return LogErr<CT>("expected \"then\" after \"if\"");
+        }
+        getNextToken(); // take in "then" & move on
+
+        auto then = parseExpression();
+        if (!then) return nullptr;
+
+        if (curTok_ != tokElse)
+            return std::make_unique<IfExprAST<CT>>(std::move(cond),
+                                                   std::move(then), env_.get());
+        getNextToken(); // take in "else" & move on
+
+        auto elsee = parseExpression();
+        if (!elsee) return nullptr;
+
+        return std::make_unique<IfExprAST<CT>>(std::move(cond), std::move(then),
+                                               std::move(elsee), env_.get());
+    }
+    //-------------------------------------------------------------------------
+
+    //-------------------------------------------------------------------------
     /// toplevelexpr ::= expression
+    /// interface for driver
     std::unique_ptr<FunctionAST<CT>> parseTopLevelExpr() {
         auto E = parseExpression();
         if (!E) return nullptr;
@@ -288,7 +325,7 @@ public:
         fprintf(stderr, "ready> ");
         getNextToken();
 
-        env_ = std::make_unique<ParserEnv<CT>>();
+        env_ = std::make_unique<ParserEnv<CT>>(enableOpt_);
         env_->initialize();
     }
 
@@ -303,6 +340,7 @@ private:
     // this holds the precedence for each binary operator that we define
     static std::map<char, int> binoPrecedence_;
     std::unique_ptr<ParserEnv<CT>> env_;
+    const bool enableOpt_;
 };
 
 // Install standard binary operators: 1 is lowest precedence

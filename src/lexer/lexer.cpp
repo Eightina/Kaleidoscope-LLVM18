@@ -38,10 +38,15 @@ int Lexer::getTok() {
             return tokDef;
         } else if (identifierStr_ == "extern") {
             return tokExtern;
+        } else if (identifierStr_ == "if") {
+            return tokIf;
+        } else if (identifierStr_ == "then") {
+            return tokThen;
+        } else if (identifierStr_ == "else") {
+            return tokElse;
         }
+        
         return tokIdentifier;
-
-        // if (_identifierStr == )
     }
 
     // number: [0-9.]*

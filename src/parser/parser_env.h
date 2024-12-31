@@ -32,13 +32,14 @@
 
 template <CompilerType CT> class ParserEnv {
 public:
-    ParserEnv() {}
+    ParserEnv() : enableOpt_(false) {}
+    ParserEnv(bool enableOpt) : enableOpt_(enableOpt) {}
 
     void initialize() {
         if constexpr (CT == CompilerType::JIT)
             theJIT_ = exitOnErr_(llvm::orc::KaleidoscopeJIT::Create());
         initializeModule();
-        initializePassManager();
+        if (enableOpt_) initializePassManager();
     }
 
     void initializeModule() {
@@ -85,6 +86,7 @@ public:
         pb_.crossRegisterProxies(*theLAM_, *theFAM_, *theCGAM_, *theMAM_);
     }
 
+    // =========================helper funcs===================================
     void runOpt(llvm::Function *theFunction) {
         theFPM_->run(*theFunction, *theFAM_);
     }
@@ -120,25 +122,38 @@ public:
             this->exitOnErr_(theJIT_->addModule(std::move(tsm)));
         }
         initializeModule();
-        initializePassManager();
+        if (enableOpt_) initializePassManager();
     }
 
+    // =========================set & get===================================
     llvm::LLVMContext *getContext() const __attribute__((always_inline)) {
         return theContext_.get();
     }
+
     llvm::IRBuilder<> *getBuilder() const __attribute__((always_inline)) {
         return builder_.get();
     }
+
     llvm::Module *getModule() __attribute__((always_inline)) {
         return theModule_.get();
     }
+
     llvm::orc::KaleidoscopeJIT *getJIT() const __attribute__((always_inline)) {
         return theJIT_.get();
     }
+
     llvm::Value *getValue(std::string &name) __attribute__((always_inline)) {
         return namedValues_[name];
     }
-    void setValue(const std::string &k, llvm::Value *v) { namedValues_[k] = v; }
+
+    constexpr bool getEnableOpt() const __attribute__((always_inline)) {
+        return enableOpt_;
+    }
+
+    void setValue(const std::string &k, llvm::Value *v)
+        __attribute__((always_inline)) {
+        namedValues_[k] = v;
+    }
 
     void printErr() { theModule_->print(llvm::errs(), nullptr); }
 
@@ -161,4 +176,7 @@ private:
     //
     llvm::PassBuilder pb_;
     llvm::ExitOnError exitOnErr_;
+
+    //
+    const bool enableOpt_;
 };
