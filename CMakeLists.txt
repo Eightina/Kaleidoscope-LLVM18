@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 set(CMAKE_C_COMPILER "clang-18")
 set(CMAKE_CXX_COMPILER "clang++-18")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3")
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -O0")
+# set(CMAKE_LINK_FLAGS "${CMAKE_LINK_FLAGS} -rdynamic -Xlinker --export-dynamic")
+
 project(MyKaleidoscope)
 
 find_package(LLVM REQUIRED CONFIG)

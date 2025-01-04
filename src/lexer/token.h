@@ -23,4 +23,6 @@ enum Token {
     tokIf = -6,
     tokThen = -7,
     tokElse = -8,
+    tokFor = -9,
+    tokDo = -10
 };

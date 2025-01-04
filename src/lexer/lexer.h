@@ -14,7 +14,9 @@
    /___/\__/|___/\__/_//_/\__/_/_//_/\_,_/
  */
 #pragma once
+#include "token.h"
 #include <string>
+#include <unordered_map>
 class Lexer {
 public:
     // gettok: returns the token from string input
@@ -26,4 +28,5 @@ private:
     int lastChar_ = ' ';
     double numVal_ = .0;
     std::string identifierStr_ = "";
+    static std::unordered_map<std::string, Token> tokenTable_;
 };

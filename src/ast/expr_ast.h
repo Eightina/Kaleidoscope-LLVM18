@@ -20,6 +20,7 @@
 #include <llvm-18/llvm/IR/Constants.h>
 #include <llvm-18/llvm/IR/Function.h>
 #include <llvm-18/llvm/IR/IRBuilder.h>
+#include <llvm-18/llvm/IR/Instructions.h>
 #include <llvm-18/llvm/IR/LLVMContext.h>
 #include <llvm-18/llvm/IR/Value.h>
 #include <memory>
@@ -200,16 +201,19 @@ public:
         // Emit "else" block. -------------------------------------------------
         theFunction->insert(theFunction->end(), elseBB);
         curBuilder->SetInsertPoint(elseBB);
-        llvm::Value* elseV;
-        if (else_ != nullptr) elseV = else_->codegen();
-        else elseV = llvm::ConstantFP::get(*curContext, llvm::APFloat(0.0));
+        llvm::Value *elseV;
+        if (else_ != nullptr)
+            elseV = else_->codegen();
+        else
+            elseV = llvm::ConstantFP::get(*curContext, llvm::APFloat(0.0));
         curBuilder->CreateBr(mergeBB);
         elseBB = curBuilder->GetInsertBlock();
 
         // Emit "merge" block. -------------------------------------------------
         theFunction->insert(theFunction->end(), mergeBB);
         curBuilder->SetInsertPoint(mergeBB);
-        llvm::PHINode *pn = curBuilder->CreatePHI(llvm::Type::getDoubleTy(*curContext), 2, "iftmp");
+        llvm::PHINode *pn = curBuilder->CreatePHI(
+            llvm::Type::getDoubleTy(*curContext), 2, "iftmp");
         pn->addIncoming(thenV, thenBB);
         pn->addIncoming(elseV, elseBB);
 
@@ -218,4 +222,94 @@ public:
 
 private:
     std::unique_ptr<ExprAST<CT>> cond_, then_, else_;
+};
+
+template <CompilerType CT> class ForExprAST : public ExprAST<CT> {
+public:
+    ForExprAST(const std::string &varName, std::unique_ptr<ExprAST<CT>> start,
+               std::unique_ptr<ExprAST<CT>> end,
+               std::unique_ptr<ExprAST<CT>> step,
+               std::unique_ptr<ExprAST<CT>> body, ParserEnv<CT> *env)
+        : ExprAST<CT>(env), varName_(varName), start_(std::move(start)),
+          end_(std::move(end)), step_(std::move(step)), body_(std::move(body)) {
+    }
+
+    // The whole loop body is one block, but remember that the body code itself
+    //  could consist of multiple blocks
+    llvm::Value *codegen() {
+        llvm::Value *startVal = start_->codegen();
+        if (!startVal) return nullptr;
+
+        llvm::IRBuilder<> *curBuilder = this->env_->getBuilder();
+        llvm::LLVMContext *curContext = this->env_->getContext();
+
+        // Make the new basic block for the loop header, inserting after current
+        //  block.
+        llvm::Function *theFunction = curBuilder->GetInsertBlock()->getParent();
+        llvm::BasicBlock *preheaderBB = curBuilder->GetInsertBlock();
+        llvm::BasicBlock *loopBB =
+            llvm::BasicBlock::Create(*curContext, "loop", theFunction);
+        // insert an explicit fall through from the current block to the loopBB
+        curBuilder->CreateBr(loopBB);
+        // start insertion in loopBB
+        curBuilder->SetInsertPoint(loopBB);
+
+        // Start the PHI node with an entry for Start. The “preheader” for the
+        //  loop is set up
+        llvm::PHINode *variable = curBuilder->CreatePHI(
+            llvm::Type::getDoubleTy(*curContext), 2, varName_);
+        variable->addIncoming(startVal, preheaderBB);
+
+        // within the loop, the variable is defined equal to the PHI node. If it
+        //  shadows an existing variable, we have to restore it, so save it now.
+        llvm::Value *oldVal = this->env_->getValue(varName_); // local var
+        this->env_->setValue(varName_, variable);
+        // emit the body of the loop. like any other expr, this can change the
+        //  current BB. We ignore the value computed by the body, but don't
+        //  allow an error
+        if (!body_->codegen()) return nullptr;
+
+        // emit the step value. ‘NextVar’ will be the value of the loop variable
+        //  on the next iteration of the loop.
+        llvm::Value *stepVal = nullptr;
+        if (step_) {
+            stepVal = step_->codegen();
+            if (!stepVal) return nullptr;
+        } else {
+            // if not specified use 1.0
+            stepVal = llvm::ConstantFP::get(*curContext, llvm::APFloat(1.0));
+        }
+        llvm::Value *nextVar =
+            curBuilder->CreateFAdd(variable, stepVal, "nextVar");
+
+        // compute the end condition
+        llvm::Value *endCond = end_->codegen();
+        if (!endCond) return nullptr;
+        // convert condition to a bool by comparing non-equal to 0.0
+        endCond = curBuilder->CreateFCmpONE(
+            endCond, llvm::ConstantFP::get(*curContext, llvm::APFloat(0.0)),
+            "loopcond");
+        
+        // create the "after loop" block and insert it
+        llvm::BasicBlock *loopEndBB = curBuilder->GetInsertBlock();
+        llvm::BasicBlock *afterBB = llvm::BasicBlock::Create(*curContext, "afterloop", theFunction);
+        // insert the conditional branch into the end of loopEndBB
+        curBuilder->CreateCondBr(endCond, loopBB, afterBB);
+        // any new code will be inserted in afterBB
+        curBuilder->SetInsertPoint(afterBB);
+
+        // add a new entry to the phi node for the backedge
+        variable->addIncoming(nextVar, loopEndBB);
+        // restore the unshadowed var
+        if (oldVal)
+            this->env_->setValue(varName_, oldVal);
+        else
+            this->env_->rmValue(varName_);
+        // for expr always returns 0.0
+        return llvm::Constant::getNullValue(llvm::Type::getDoubleTy(*curContext));
+    }
+
+private:
+    std::string varName_;
+    std::unique_ptr<ExprAST<CT>> start_, end_, step_, body_;
 };

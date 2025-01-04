@@ -116,12 +116,6 @@ public:
             case tokExtern:
                 handleExtern();
                 break;
-                // case tok_if:
-
-                // case tok_then:
-
-                // case tok_else:
-
             default:
                 handleTopLevelExpression();
                 break;

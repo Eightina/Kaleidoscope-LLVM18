@@ -22,18 +22,21 @@ template <CompilerType CT> class ExprAST;
 template <CompilerType CT> class PrototypeAST;
 
 template <CompilerType CT>
-std::unique_ptr<ExprAST<CT>> LogErr(const char *str) {
+std::unique_ptr<ExprAST<CT>> __attribute__((always_inline))
+LogErr(const char *str) {
     std::cout << stderr << "Error: " << str << std::endl;
     return nullptr;
 }
 
 template <CompilerType CT>
-std::unique_ptr<PrototypeAST<CT>> LogErrP(const char *str) {
+std::unique_ptr<PrototypeAST<CT>> __attribute__((always_inline))
+LogErrP(const char *str) {
     LogErr<CT>(str);
     return nullptr;
 }
 
-template <CompilerType CT> llvm::Value *LogErrorV(const char *str) {
+template <CompilerType CT>
+    llvm::Value __attribute__((always_inline)) * LogErrorV(const char *str) {
     LogErr<CT>(str);
     return nullptr;
 }

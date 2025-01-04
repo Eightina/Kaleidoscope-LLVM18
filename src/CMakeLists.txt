@@ -41,6 +41,9 @@ foreach(flag IN LISTS LLVM_CONFIG_FLAGS)
         list(APPEND LINK_FLAGS "${stripped_flag}")
     endif()
 endforeach()
+
+set(LINK_FLAGS "${LINK_FLAGS} -rdynamic -Xlinker --export-dynamic")
+
 # apply compiling and linking options
 message(CXX_FLAGS: ${CXX_FLAGS} )
 message(LINK_FLAGS: ${LINK_FLAGS} )

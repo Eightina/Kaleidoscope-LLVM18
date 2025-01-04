@@ -20,6 +20,16 @@
 #include <iostream>
 #include <string>
 
+inline std::unordered_map<std::string, Token> Lexer::tokenTable_{
+    {"def", tokDef},
+    {"extern", tokExtern},
+    {"if", tokIf},
+    {"then", tokThen},
+    {"else", tokElse},
+    {"for", tokFor},
+    {"do", tokDo}
+}; 
+
 // gettok: returns the token from string input
 int Lexer::getTok() {
 
@@ -34,17 +44,8 @@ int Lexer::getTok() {
             identifierStr_.push_back(lastChar_);
         }
 
-        if (identifierStr_ == "def") {
-            return tokDef;
-        } else if (identifierStr_ == "extern") {
-            return tokExtern;
-        } else if (identifierStr_ == "if") {
-            return tokIf;
-        } else if (identifierStr_ == "then") {
-            return tokThen;
-        } else if (identifierStr_ == "else") {
-            return tokElse;
-        }
+        auto resPos = tokenTable_.find(identifierStr_);
+        if (resPos != tokenTable_.end()) return resPos->second;
         
         return tokIdentifier;
     }
@@ -88,7 +89,6 @@ double Lexer::getNumVal() const {
 const std::string &Lexer::getIdentifierStr() const {
     return identifierStr_;
 }
-
 // int main() {
 //     // testing
 //     Lexer lexer;

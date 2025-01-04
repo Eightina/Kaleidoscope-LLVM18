@@ -137,6 +137,8 @@ public:
             return parseParenExpr();
         case tokIf:
             return parseIfExpr();
+        case tokFor:
+            return parseForExpr();
         }
     }
     /// expression
@@ -270,6 +272,8 @@ public:
     //-------------------------------------------------------------------------
 
     // handling control flows--------------------------------------------------
+    /// ifexpr
+    /// ::= 'if' expr 'then' expr ('else' expr)
     std::unique_ptr<ExprAST<CT>> parseIfExpr() {
         getNextToken(); // take in "if" & move on
         auto cond = parseExpression();
@@ -293,6 +297,46 @@ public:
 
         return std::make_unique<IfExprAST<CT>>(std::move(cond), std::move(then),
                                                std::move(elsee), env_.get());
+    }
+    /// forexpr
+    /// ::= 'fo=r' identifier '' expr ',' expr (',' expr)? 'do' expression
+    std::unique_ptr<ExprAST<CT>> parseForExpr() {
+        getNextToken(); // take in "for" and move on
+        if (curTok_ != tokIdentifier)
+            return LogErr<CT>("expected identifier after for");
+
+        std::string idName = lexer_.getIdentifierStr();
+        getNextToken(); // take in identifier and move on
+
+        if (curTok_ != '=') return LogErr<CT>("expected \"=\" after for");
+        getNextToken(); // take in "=" and move on
+
+        auto start = parseExpression();
+        if (!start) return nullptr;
+        if (curTok_ != ',')
+            return LogErr<CT>("expected ',' after for start value");
+        getNextToken(); // take in ","
+
+        auto end = parseExpression();
+        if (!end) return nullptr;
+
+        // step is optional
+        std::unique_ptr<ExprAST<CT>> step;
+        if (curTok_ == ',') {
+            getNextToken(); // take in ","
+            step = parseExpression();
+            if (!step) return nullptr;
+        }
+
+        if (curTok_ != tokDo) return LogErr<CT>("expected \"in\" after for");
+        getNextToken(); // take in "in"
+
+        auto body = parseExpression();
+        if (!body) return nullptr;
+
+        return std::make_unique<ForExprAST<CT>>(idName, std::move(start),
+                                                std::move(end), std::move(step),
+                                                std::move(body), env_.get());
     }
     //-------------------------------------------------------------------------
 

@@ -155,6 +155,11 @@ public:
         namedValues_[k] = v;
     }
 
+    void rmValue(const std::string &k)
+        __attribute__((always_inline)) {
+        namedValues_.erase(k);
+    }
+
     void printErr() { theModule_->print(llvm::errs(), nullptr); }
 
 private:
