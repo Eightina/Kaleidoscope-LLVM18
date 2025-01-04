@@ -14,8 +14,8 @@
  */
 #include "compiler_type.h"
 #include "driver.h"
-#include "lexer.h"
 #include "parser.h"
+#include "utils.h"
 
 int main() {
     // Lexer l;

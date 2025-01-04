@@ -15,19 +15,7 @@
 #include "compiler_type.h"
 #include "driver.h"
 #include "parser.h"
-
-/// putchard - putchar that takes a double and returns 0.
-extern "C" DLLEXPORT double putchard(double X) {
-  fputc((char)X, stderr);
-  return 0;
-}
-
-/// printd - printf that takes a double prints it as "%f\n", returning 0.
-extern "C" DLLEXPORT double printd(double X) {
-  fprintf(stderr, "%f\n", X);
-  return 0;
-}
-
+#include "utils.h"
 
 int main() {
     Parser<CompilerType::JIT> p(false);
