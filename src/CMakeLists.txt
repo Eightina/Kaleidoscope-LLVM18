@@ -8,10 +8,10 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lexer)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/parser)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/utils)
 
-add_executable(aot_parser ./utils/utils.cpp ./lexer/lexer.cpp main_aot.cpp)
-add_executable(jit_parser ./utils/utils.cpp ./lexer/lexer.cpp main_jit.cpp)
-target_include_directories(aot_parser PRIVATE ${LLVM_INCLUDE_DIRS})
-target_include_directories(jit_parser PRIVATE ${LLVM_INCLUDE_DIRS})
+add_executable(aot_compiler ./utils/utils.cpp ./lexer/lexer.cpp main_aot.cpp)
+add_executable(jit_compiler ./utils/utils.cpp ./lexer/lexer.cpp main_jit.cpp)
+target_include_directories(aot_compiler PRIVATE ${LLVM_INCLUDE_DIRS})
+target_include_directories(jit_compiler PRIVATE ${LLVM_INCLUDE_DIRS})
 
 # message("LLVM_LIBRARIES @ ${LLVM_LIBRARIES}")
 # target_link_libraries(parser_test PRIVATE 
@@ -50,11 +50,11 @@ set(LINK_FLAGS "${LINK_FLAGS} -rdynamic -Xlinker --export-dynamic")
 message(CXX_FLAGS: ${CXX_FLAGS} )
 message(LINK_FLAGS: ${LINK_FLAGS} )
 
-target_compile_options(aot_parser PRIVATE ${CXX_FLAGS})
-target_link_libraries(aot_parser PRIVATE ${LINK_FLAGS})
+target_compile_options(aot_compiler PRIVATE ${CXX_FLAGS})
+target_link_libraries(aot_compiler PRIVATE ${LINK_FLAGS})
 
-target_compile_options(jit_parser PRIVATE ${CXX_FLAGS})
-target_link_libraries(jit_parser PRIVATE ${LINK_FLAGS})
+target_compile_options(jit_compiler PRIVATE ${CXX_FLAGS})
+target_link_libraries(jit_compiler PRIVATE ${LINK_FLAGS})
 # set(LLVM_TARGETS_TO_BUILD "X86" CACHE STRING "List of targets to build for LLVM")
 # include_directories ("${PROJECT_SOURCE_DIR}/include")
 

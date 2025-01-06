@@ -17,10 +17,25 @@
 #include "parser.h"
 #include "utils.h"
 
-int main() {
-    Parser<CompilerType::JIT> p(false);
-    Driver<CompilerType::JIT> driver(&p);
-    ParserEnv<CompilerType::JIT> *pEnv = p.getEnv();
+int main(int argc, char *argv[]) {
+    bool enableInteractive = true;
+    bool enableOptimization = true;
+
+    if (argc > 2) {
+        printf("error: input more than one file");
+        return -1;
+    }
+    if (argc == 2) {
+        auto filename = argv[1];
+        if (freopen(filename, "r", stdin) == nullptr) {
+            std::cerr << "Error: Failed to open file." << std::endl;
+            return 1;
+        }
+        enableInteractive = false;
+    }
+
+    Driver<CompilerType::JIT> driver(enableOptimization, enableInteractive);
+    ParserEnv<CompilerType::JIT> *pEnv = driver.getParserEnv();
 
     // Run the main "interpreter loop" now.
     driver.mainLoop();
@@ -29,4 +44,3 @@ int main() {
 
     return 0;
 }
- 

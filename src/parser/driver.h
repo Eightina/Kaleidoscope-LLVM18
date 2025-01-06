@@ -15,10 +15,27 @@
 #include "compiler_type.h"
 #include "parser.h"
 #include <llvm-18/llvm/Support/Error.h>
+#include <llvm-18/llvm/Support/TargetSelect.h>
+#include <memory>
 
 template <CompilerType CT> class Driver {
 public:
-    Driver(Parser<CT> *parser) : parser_(parser), pEnv_(parser->getEnv()) {}
+    Driver(bool enableOptimization, bool enableInteraction)
+        : enableOptimization_(enableOptimization),
+          enableInteraction_(enableInteraction) {
+
+        if constexpr (CT == CompilerType::JIT) {
+            llvm::InitializeNativeTarget();
+            llvm::InitializeNativeTargetAsmPrinter();
+            llvm::InitializeNativeTargetAsmParser();
+        }
+
+        if (enableInteraction_) fprintf(stderr, "ready> ");
+
+        parser_ = std::make_unique<Parser<CT>>(enableOptimization_);
+        pEnv_ = parser_->getEnv();
+    }
+
     // high level handling----------------------------------------------------
     void handleDefinition() {
         if (auto defAST = parser_->parseDefinition()) {
@@ -103,7 +120,7 @@ public:
     /// top ::= definition | external | expression | ';'
     void mainLoop() {
         while (true) {
-            fprintf(stderr, "ready> ");
+            if (enableInteraction_) fprintf(stderr, "ready> ");
             switch (parser_->getCurToken()) {
             case tokEof:
                 return;
@@ -123,8 +140,18 @@ public:
         }
     }
 
+    Parser<CT> *getParser() __attribute__((always_inline)) {
+        return parser_.get();
+    }
+
+    ParserEnv<CT> *getParserEnv() __attribute__((always_inline)) {
+        return pEnv_;
+    }
+
 private:
-    Parser<CT> *parser_;
+    std::unique_ptr<Parser<CT>> parser_;
     ParserEnv<CT> *pEnv_;
     llvm::ExitOnError exitOnErr_;
+    bool enableInteraction_;
+    bool enableOptimization_;
 };

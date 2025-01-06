@@ -26,7 +26,6 @@
 #include <cassert>
 #include <cstdio>
 #include <iostream>
-#include <llvm-18/llvm/Support/TargetSelect.h>
 #include <map>
 #include <memory>
 #include <vector>
@@ -37,10 +36,10 @@ public:
 
     Parser(bool enableOpt) : enableOpt_(enableOpt) { initialize(); }
 
-    Parser(bool enableOpt, Lexer &lexer)
-        : enableOpt_(enableOpt), lexer_(std::move(lexer)) {
-        initialize();
-    }
+    // Parser(bool enableOpt, Lexer &lexer)
+    //     : enableOpt_(enableOpt), lexer_(std::move(lexer)) {
+    //     initialize();
+    // }
 
     void test_lexer() {
         while (true) {
@@ -48,7 +47,7 @@ public:
         }
     }
 
-    int getNextToken() { return curTok_ = lexer_.getTok(); }
+    int getNextToken() { return curTok_ = lexer_->getTok(); }
 
     // In order to parse binary expression correctly:
     // "x+y*z" -> "x+(y*z)"
@@ -76,8 +75,8 @@ public:
     // handling basic expression units-----------------------------------------
     /// numberexpr ::= number
     std::unique_ptr<ExprAST<CT>> parseNumberExpr() {
-        auto result =
-            std::make_unique<NumberExprAST<CT>>(lexer_.getNumVal(), env_.get());
+        auto result = std::make_unique<NumberExprAST<CT>>(lexer_->getNumVal(),
+                                                          env_.get());
         getNextToken();
         return std::move(result);
     }
@@ -94,7 +93,7 @@ public:
     // ::= identifier
     // ::= identifier '(' expression* ')'
     std::unique_ptr<ExprAST<CT>> parseIdentifierExpr() {
-        std::string idName(lexer_.getIdentifierStr());
+        std::string idName(lexer_->getIdentifierStr());
         getNextToken(); // take in identifier
         if (curTok_ != '(')
             return std::make_unique<VariableExprAST<CT>>(idName, env_.get());
@@ -214,7 +213,7 @@ public:
         if (curTok_ != tokIdentifier) {
             return LogErrP<CT>("expected function name in function prototype");
         }
-        std::string fnName(lexer_.getIdentifierStr());
+        std::string fnName(lexer_->getIdentifierStr());
 
         // '(' before arg list
         getNextToken();
@@ -224,7 +223,7 @@ public:
         // arglist
         std::vector<std::string> argNames;
         while (getNextToken() == tokIdentifier)
-            argNames.push_back(lexer_.getIdentifierStr());
+            argNames.push_back(lexer_->getIdentifierStr());
 
         // ')' after arg list
         if (curTok_ != ')')
@@ -305,7 +304,7 @@ public:
         if (curTok_ != tokIdentifier)
             return LogErr<CT>("expected identifier after for");
 
-        std::string idName = lexer_.getIdentifierStr();
+        std::string idName = lexer_->getIdentifierStr();
         getNextToken(); // take in identifier and move on
 
         if (curTok_ != '=') return LogErr<CT>("expected \"=\" after for");
@@ -328,8 +327,8 @@ public:
             if (!step) return nullptr;
         }
 
-        if (curTok_ != tokDo) return LogErr<CT>("expected \"in\" after for");
-        getNextToken(); // take in "in"
+        if (curTok_ != tokDo) return LogErr<CT>("expected \"do\" after for");
+        getNextToken(); // take in "do"
 
         auto body = parseExpression();
         if (!body) return nullptr;
@@ -360,13 +359,8 @@ public:
     // helper func----------------------------------------------------
 
     void initialize() {
-        if constexpr (CT == CompilerType::JIT) {
-            llvm::InitializeNativeTarget();
-            llvm::InitializeNativeTargetAsmPrinter();
-            llvm::InitializeNativeTargetAsmParser();
-        }
+        lexer_ = std::make_unique<Lexer>();
 
-        fprintf(stderr, "ready> ");
         getNextToken();
 
         env_ = std::make_unique<ParserEnv<CT>>(enableOpt_);
@@ -379,7 +373,7 @@ public:
     }
 
 private:
-    Lexer lexer_;
+    std::unique_ptr<Lexer> lexer_;
     int curTok_;
     // this holds the precedence for each binary operator that we define
     static std::map<char, int> binoPrecedence_;
