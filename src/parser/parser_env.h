@@ -36,6 +36,7 @@ public:
     ParserEnv(bool enableOpt) : enableOpt_(enableOpt) {}
 
     void initialize() {
+        binoPrecedence_ = {{'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
         if constexpr (CT == CompilerType::JIT)
             theJIT_ = exitOnErr_(llvm::orc::KaleidoscopeJIT::Create());
         initializeModule();
@@ -134,7 +135,7 @@ public:
         return builder_.get();
     }
 
-    llvm::Module *getModule() __attribute__((always_inline)) {
+    llvm::Module *getModule() const __attribute__((always_inline)) {
         return theModule_.get();
     }
 
@@ -142,12 +143,23 @@ public:
         return theJIT_.get();
     }
 
-    llvm::Value *getValue(std::string &name) __attribute__((always_inline)) {
-        return namedValues_[name];
+    llvm::Value *getValue(const std::string &name) const __attribute__((always_inline)) {
+        auto tar = namedValues_.find(name);
+        if (tar != namedValues_.end()) {
+            return tar->second;
+        }
+        return nullptr;
     }
 
     constexpr bool getEnableOpt() const __attribute__((always_inline)) {
         return enableOpt_;
+    }
+
+    int getBinoPrecedence(const char k) const __attribute__((always_inline)) {
+        auto tar = binoPrecedence_.find(k);
+        if (tar != binoPrecedence_.end())
+            return tar->second;
+        return -1;
     }
 
     void setValue(const std::string &k, llvm::Value *v)
@@ -159,6 +171,10 @@ public:
         namedValues_.erase(k);
     }
 
+    void setBinoPrecedence(const char k, const int v) __attribute__((always_inline)) {
+        binoPrecedence_[k] = v;
+    }
+
     void printErr() { theModule_->print(llvm::errs(), nullptr); }
 
 private:
@@ -167,6 +183,7 @@ private:
     std::unique_ptr<llvm::Module> theModule_;
     std::map<std::string, llvm::Value *> namedValues_;
     std::map<std::string, std::unique_ptr<PrototypeAST<CT>>> functionProtos_;
+    std::map<char, int> binoPrecedence_;
 
     // for optimizations and JIT
     std::unique_ptr<llvm::FunctionPassManager> theFPM_;

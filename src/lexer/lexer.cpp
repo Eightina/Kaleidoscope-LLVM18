@@ -27,7 +27,9 @@ inline std::unordered_map<std::string, Token> Lexer::tokenTable_{
     {"then", tokThen},
     {"else", tokElse},
     {"for", tokFor},
-    {"do", tokDo}
+    {"do", tokDo},
+    {"binary", tokBinary},
+    {"unary", tokUnary},
 }; 
 
 // gettok: returns the token from string input

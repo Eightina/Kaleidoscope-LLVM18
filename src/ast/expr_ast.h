@@ -97,8 +97,17 @@ public:
                 l, llvm::Type::getDoubleTy(*(this->env_->getContext())),
                 "booltmp");
         default:
-            return LogErrorV<CT>("invalid binary op");
+            break;
+            // return LogErrorV<CT>("invalid binary op");
         }
+
+        // check if the op is user-defined
+        llvm::Function *f =
+            this->env_->getFunction(std::string("binary") + op_);
+        assert(f && "invalid binary op (undefined)");
+
+        llvm::Value *ops[2] = {l, r};
+        return this->env_->getBuilder()->CreateCall(f, ops, "binop");
     }
 
 private:
@@ -236,7 +245,7 @@ public:
 
     // The whole loop body is one block, but remember that the body code itself
     //  could consist of multiple blocks
-    llvm::Value *codegen() {
+    llvm::Value *codegen() override {
         llvm::Value *startVal = start_->codegen();
         if (!startVal) return nullptr;
 
@@ -289,10 +298,11 @@ public:
         endCond = curBuilder->CreateFCmpONE(
             endCond, llvm::ConstantFP::get(*curContext, llvm::APFloat(0.0)),
             "loopcond");
-        
+
         // create the "after loop" block and insert it
         llvm::BasicBlock *loopEndBB = curBuilder->GetInsertBlock();
-        llvm::BasicBlock *afterBB = llvm::BasicBlock::Create(*curContext, "afterloop", theFunction);
+        llvm::BasicBlock *afterBB =
+            llvm::BasicBlock::Create(*curContext, "afterloop", theFunction);
         // insert the conditional branch into the end of loopEndBB
         curBuilder->CreateCondBr(endCond, loopBB, afterBB);
         // any new code will be inserted in afterBB
@@ -306,10 +316,34 @@ public:
         else
             this->env_->rmValue(varName_);
         // for expr always returns 0.0
-        return llvm::Constant::getNullValue(llvm::Type::getDoubleTy(*curContext));
+        return llvm::Constant::getNullValue(
+            llvm::Type::getDoubleTy(*curContext));
     }
 
 private:
     std::string varName_;
     std::unique_ptr<ExprAST<CT>> start_, end_, step_, body_;
+};
+
+template <CompilerType CT> class UnaryExprAST : public ExprAST<CT> {
+
+public:
+    UnaryExprAST(char opcode, std::unique_ptr<ExprAST<CT>> operand,
+                 ParserEnv<CT> *env)
+        : ExprAST<CT>(env), opCode_(opcode), operand_(std::move(operand)) {}
+
+    llvm::Value *codegen() override {
+        llvm::Value *operandv = operand_->codegen();
+        if (!operandv) return nullptr;
+        llvm::Function *f =
+            this->env_->getFunction(std::string("unary") + opCode_);
+        if (!f) return LogErrorV<CT>("unknown unary operator");
+
+        return this->env_->getBuilder()->CreateCall(f, operandv, "unop");
+
+    }
+
+protected:
+    char opCode_;
+    std::unique_ptr<ExprAST<CT>> operand_;
 };

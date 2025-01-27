@@ -24,5 +24,7 @@ enum Token {
     tokThen = -7,
     tokElse = -8,
     tokFor = -9,
-    tokDo = -10
+    tokDo = -10,
+    tokBinary = -11,
+    tokUnary = -12
 };

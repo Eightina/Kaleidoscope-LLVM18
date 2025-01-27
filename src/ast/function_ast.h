@@ -23,6 +23,7 @@
 
 template <CompilerType CT> class ParserEnv;
 template <CompilerType CT> class PrototypeAST;
+template <CompilerType CT> class BinaryOperatorAST;
 template <CompilerType CT> class ExprAST;
 
 template <CompilerType CT> class FunctionAST {
@@ -34,6 +35,8 @@ public:
     llvm::Function *codegen() {
 
         llvm::Function *theFunction;
+        PrototypeAST<CT> &p = *proto_;
+
         if constexpr (CT == CompilerType::AOT) {
 
             // First, check for an existing function from a previous 'extern'
@@ -63,8 +66,7 @@ public:
             if (!theFunction) return nullptr;
 
             // we want to assert that the function is empty (i.e. has no body
-            // yet)
-            //  before we start
+            //  yet) before we start
             if (!theFunction->empty())
                 return (llvm::Function *)LogErrorV<CT>(
                     "function cannot be redefined");
@@ -75,12 +77,17 @@ public:
             // Firstly, transfer ownership of the prototype to the
             // FunctionProtos map,
             //  but keep a reference to it for use below.
-            auto &p = *proto_;
+            // auto &p = *proto_;
             env_->addProto(proto_);
             theFunction = env_->getFunction(p.getName());
             if (!theFunction) return nullptr;
         }
+        if (p.isBinaryOp()) {
+            auto binop = static_cast<BinaryOperatorAST<CT>&>(p);
+            env_->setBinoPrecedence(binop.getOpName(),
+                                    binop.getBinaryPrecedence());
 
+        }
         // Create a new basic block to start insertion into.
         llvm::IRBuilder<> *curBuilder = env_->getBuilder();
         llvm::BasicBlock *bb = llvm::BasicBlock::Create(*(env_->getContext()),

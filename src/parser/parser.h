@@ -24,6 +24,7 @@
 #include "parser_env.h"
 #include "token.h"
 #include <cassert>
+#include <cctype>
 #include <cstdio>
 #include <iostream>
 #include <map>
@@ -57,7 +58,7 @@ public:
         if (!isascii(curTok_)) return -1;
 
         // make sure it is a declared binop
-        int tokPrec = binoPrecedence_[curTok_];
+        int tokPrec = this->env_->getBinoPrecedence(curTok_);
         if (tokPrec <= 0) return -1;
         return tokPrec;
     }
@@ -143,15 +144,33 @@ public:
     /// expression
     /// ::= primary binoprhs
     std::unique_ptr<ExprAST<CT>> parseExpression() {
-        auto lhs = parsePrimary();
+        auto lhs = parseUnary();
         if (lhs == nullptr) return nullptr;
 
         return parseBinOpRHS(0, std::move(lhs));
     }
     //-------------------------------------------------------------------------
 
-    // handling binary expressions---------------------------------------------
+    // handling binary/unary expressions---------------------------------------------
     //
+
+    /// unary
+    ///   ::= primary
+    ///   ::= '!' unary
+    std::unique_ptr<ExprAST<CT>> parseUnary() {
+        // if cur token isnt an operator, it must be a primary expr
+        if (!isascii(curTok_) || curTok_ == '(' || curTok_ == ',')
+            return parsePrimary();
+        
+        // if this is a unary operator, read it
+        int opc = curTok_;
+        getNextToken();
+        if (auto operand = parseUnary())
+            // recursive for code like "!!x"
+            return std::make_unique<UnaryExprAST<CT>>(opc, std::move(operand), env_.get());
+        return nullptr;
+    }
+
     /// binoprhs
     /// ::= ('+' primary)*
     /*
@@ -183,7 +202,7 @@ public:
             // Then get next token and parse the primary expression
             //  after the binary operator
             getNextToken();
-            auto rhs = parsePrimary();
+            auto rhs = parseUnary();
             if (!rhs) return nullptr;
             // If binOp binds less tightly with RHS than the operator after RHS,
             // let
@@ -208,15 +227,62 @@ public:
     // handling fucntion prototypes--------------------------------------------
     /// prototype
     /// ::= id '(' id* ')'
+    /// ::= binary LETTER number? (id, id)
     std::unique_ptr<PrototypeAST<CT>> parsePrototype() {
         // func name
-        if (curTok_ != tokIdentifier) {
+        std::string fnName;
+        PrototypeType kind = PrototypeType::NonOp;
+        unsigned binaryPrecedence = 30;
+
+        switch (curTok_) {
+        default:
             return LogErrP<CT>("expected function name in function prototype");
+        case (tokIdentifier):
+            fnName = lexer_->getIdentifierStr();
+            // kind = 0;
+            // '(' before arg list
+            getNextToken();
+            break;
+        case (tokUnary):
+            getNextToken();
+            if (!isascii(curTok_))
+                return LogErrP<CT>("expected unary operator");
+            fnName = "unary";
+            fnName += (char)curTok_;
+            kind = PrototypeType::Unary;
+            getNextToken();
+            break;
+        case (tokBinary):
+            // 'LETTER'
+            getNextToken();
+            if (!isascii(curTok_)) {
+                return LogErrP<CT>("expected binary operator");
+            }
+            fnName = "binary";
+            fnName += (char)curTok_;
+            kind = PrototypeType::Binary;
+
+            // number? as precedence
+            getNextToken();
+            double curNumVal = lexer_->getNumVal();
+            if (curTok_ == tokNumber) { // if defining precedence
+                if (curNumVal < 1 || curNumVal > 100)
+                    return LogErrP<CT>("Invalid precedence: must be 1..100");
+                binaryPrecedence = (unsigned)curNumVal;
+                // '(' before arg list
+                getNextToken();
+            }
+            break;
         }
-        std::string fnName(lexer_->getIdentifierStr());
+
+        // if (curTok_ != tokIdentifier) {
+        //     return LogErrP<CT>("expected function name in function
+        //     prototype");
+        // }
+        // fnName = lexer_->getIdentifierStr();
 
         // '(' before arg list
-        getNextToken();
+        // getNextToken();
         if (curTok_ != '(')
             return LogErrP<CT>("expected '(' in function prototype");
 
@@ -230,7 +296,21 @@ public:
             return LogErrP<CT>("expected ')' in function prototype");
 
         getNextToken();
+
+        // Verify right number of names for operator.
+        if ((kind == PrototypeType::Unary && argNames.size() != 1) ||
+            (kind == PrototypeType::Binary && argNames.size() != 2)) {
+            return LogErrP<CT>("Invalid number of operands for operator");
+        }
+
         // finish
+        if (kind == PrototypeType::Unary)
+            return std::make_unique<UnaryOperatorAST<CT>>(
+                fnName, std::move(argNames), env_.get());
+        else if (kind == PrototypeType::Binary)
+            return std::make_unique<BinaryOperatorAST<CT>>(
+                fnName, std::move(argNames), binaryPrecedence, env_.get());
+
         return std::make_unique<PrototypeAST<CT>>(fnName, std::move(argNames),
                                                   env_.get());
         // notice:
@@ -359,6 +439,8 @@ public:
     // helper func----------------------------------------------------
 
     void initialize() {
+        // binoPrecedence_ = {{'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
+
         lexer_ = std::make_unique<Lexer>();
 
         getNextToken();
@@ -376,12 +458,12 @@ private:
     std::unique_ptr<Lexer> lexer_;
     int curTok_;
     // this holds the precedence for each binary operator that we define
-    static std::map<char, int> binoPrecedence_;
+    // std::map<char, int> binoPrecedence_;
     std::unique_ptr<ParserEnv<CT>> env_;
     const bool enableOpt_;
 };
 
 // Install standard binary operators: 1 is lowest precedence
-template <CompilerType CT>
-inline std::map<char, int> Parser<CT>::binoPrecedence_{
-    {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};
+// template <CompilerType CT>
+// inline std::map<char, int> Parser<CT>::binoPrecedence_{
+    // {'<', 10}, {'+', 20}, {'-', 20}, {'*', 40}};

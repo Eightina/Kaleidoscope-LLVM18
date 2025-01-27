@@ -20,17 +20,33 @@
 
 template <CompilerType CT> class ParserEnv;
 
+enum class PrototypeType { NonOp, Unary, Binary };
+
 // This class represents the prototype for a function, including
 //  its name, arg names, arg number
 template <CompilerType CT> class PrototypeAST {
 public:
     PrototypeAST(const std::string &name, std::vector<std::string> args,
                  ParserEnv<CT> *env)
-        : name_(name), args_(std::move(args)), env_(env) {}
+        : name_(name), args_(std::move(args)), env_(env),
+          thisType_(PrototypeType::NonOp) {}
 
     const std::string &getName() const { return name_; }
 
     const std::vector<std::string> &getArgs() const { return args_; }
+
+    bool isUnaryOp() const {
+        return thisType_ != PrototypeType::NonOp && args_.size() == 1;
+    }
+
+    bool isBinaryOp() const {
+        return thisType_ != PrototypeType::NonOp && args_.size() == 2;
+    }
+
+    char getOpName() const {
+        assert(isUnaryOp() || isBinaryOp());
+        return name_[name_.size() - 1];
+    }
 
     llvm::Function *codegen() {
         // create the arguments list for the function prototype
@@ -53,8 +69,9 @@ public:
         return F;
     }
 
-private:
+protected:
     ParserEnv<CT> *env_;
     std::string name_;
     std::vector<std::string> args_;
+    PrototypeType thisType_;
 };
